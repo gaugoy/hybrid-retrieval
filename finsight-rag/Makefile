@@ -44,9 +44,8 @@ jupyter: ## open JupyterLab in notebooks/ (uses this project's .venv kernel)
 data: ## P1: download FinanceBench
 	uv run python scripts/01_download_data.py
 
-ingest: ## P2+P3: parse PDFs and chunk
-	uv run python scripts/03_parse_pdfs.py
-	uv run python scripts/04_chunk.py
+ingest: ## P2: parse PDFs into clean pages (all cores; chunking is added in P3)
+	uv run finsight ingest --workers 0
 
 index: ## P4: embed + build Qdrant and BM25 indexes
 	uv run python scripts/05_embed_and_index.py

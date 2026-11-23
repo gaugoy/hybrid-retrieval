@@ -55,6 +55,7 @@ ENV_ALIASES: dict[str, str] = {
 # Paths, API and logging settings are machine- or deployment-specific.
 FINGERPRINT_FIELDS = {
     "dataset",
+    "ingestion",
     "chunking",
     "embedding",
     "retrieval",
@@ -96,6 +97,21 @@ class PathsCfg(_Strict):
             for name, p in self.model_dump().items()
         }
         return PathsCfg(**values)
+
+
+class IngestionCfg(_Strict):
+    """How PDF pages become text (P2). See finsight.ingestion for what each knob does."""
+
+    row_tolerance_factor: float = Field(0.5, gt=0, le=2)  # same row if |Δy| ≤ factor × line height
+    column_gap_factor: float = Field(
+        1.5, gt=0
+    )  # gap > factor × line height starts a new " | " cell
+    paragraph_gap_factor: float = Field(
+        1.2, gt=0
+    )  # vertical gap > factor × line height → blank line
+    boilerplate_edge_lines: int = Field(3, ge=0)  # only the top/bottom N lines can be header/footer
+    boilerplate_min_share: float = Field(0.5, gt=0, le=1)  # repeated on ≥ this share of pages
+    min_table_rows: int = Field(3, ge=1)  # rows with ≥2 cells incl. a number → page has_table
 
 
 class ChunkingCfg(_Strict):
@@ -200,6 +216,7 @@ class Secrets(BaseModel):
 class Settings(_Strict):
     dataset: Literal["financebench", "multihop"] = "financebench"
     paths: PathsCfg = Field(default_factory=PathsCfg)
+    ingestion: IngestionCfg = Field(default_factory=IngestionCfg)
     chunking: ChunkingCfg = Field(default_factory=ChunkingCfg)
     embedding: EmbeddingCfg = Field(default_factory=EmbeddingCfg)
     vector_store: VectorStoreCfg = Field(default_factory=VectorStoreCfg)
