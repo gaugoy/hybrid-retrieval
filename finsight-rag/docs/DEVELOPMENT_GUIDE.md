@@ -501,7 +501,7 @@ finsight-rag/
       runs-on: ubuntu-latest
       steps:
         - uses: actions/checkout@v7
-        - uses: astral-sh/setup-uv@v10
+        - uses: astral-sh/setup-uv@v10.4.0   # full tag: no moving `v10` tag exists
         - run: uv python install 3.12
         - run: uv sync --all-extras
         - run: uv run ruff check . && uv run ruff format --check .
@@ -1079,7 +1079,7 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 | 2026-11-23 | P0 | Fingerprint covers only result-affecting sections (dataset, chunking, embedding, retrieval, rerank, pipeline, generation, llm, judge) | Paths, API and logging settings are machine-specific and must not change the result hash |
 | 2026-11-23 | P0 | Added `diagnostics.py` (shared by the script and `finsight check-env`) and a `finsight show-config` command | Keeps the step script thin; lets you print the resolved config |
 | 2026-11-23 | P0 | Linux installs use the CPU-only torch index (`[tool.uv.sources]`) | CI and Docker don't need multi-GB CUDA wheels; macOS keeps MPS |
-| 2026-11-23 | P0 | CI uses `actions/checkout@v7` and `astral-sh/setup-uv@v10` (latest releases) | The versions in the original draft were outdated |
+| 2026-11-23 | P0 | CI uses `actions/checkout@v7` and `astral-sh/setup-uv@v10.4.0` (latest releases) | The draft's versions were outdated. setup-uv publishes no moving `v10` tag (the first CI run failed on it), so it is pinned to the full tag |
 | 2026-11-23 | P0 | pre-commit config lives in `finsight-rag/` and is installed with `-c` from the git root; ruff `known-first-party = ["finsight"]` | The git root is the parent folder; without the setting, ruff sorted imports differently depending on the directory it ran from |
 | 2026-11-23 | spec | Page indexes stored 0-based (`page_idx`), shown +1 | FinanceBench `evidence_page_num` is 0-based (verified against PyMuPDF) |
 | 2026-11-23 | spec | Download PDFs directly from GitHub raw, not via HF `datasets` | Simpler, no extra dependency; the HF repo holds only the JSONL |

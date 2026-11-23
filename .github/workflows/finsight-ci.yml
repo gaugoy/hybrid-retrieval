@@ -24,7 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # Pinned to a full tag: setup-uv publishes no moving major tag such as `v10`.
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
           cache-dependency-glob: finsight-rag/uv.lock
