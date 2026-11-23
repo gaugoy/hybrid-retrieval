@@ -21,6 +21,14 @@ paths:
   embed_cache_dir: indexes/embed_cache
   results_dir: results
 
+ingestion:                      # P2: PDF page → text (see src/finsight/ingestion/)
+  row_tolerance_factor: 0.5      # words share a row if their vertical centres differ ≤ 0.5 × line height
+  column_gap_factor: 1.5         # a horizontal gap > 1.5 × line height starts a new cell (" | ")
+  paragraph_gap_factor: 1.2      # a vertical gap > 1.2 × line height inserts a blank line
+  boilerplate_edge_lines: 3      # only the top/bottom 3 lines of a page can be header/footer
+  boilerplate_min_share: 0.5     # ...and only if they repeat on ≥ 50% of the document's pages
+  min_table_rows: 3              # ≥ 3 multi-cell numeric rows → page.has_table = true
+
 chunking:
   strategy: page_aware          # fixed | recursive | page_aware | parent_child
   chunk_tokens: 384             # bge models accept at most 512 tokens; leave room for a context header

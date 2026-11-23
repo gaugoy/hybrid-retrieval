@@ -81,9 +81,27 @@ def download(
 
 
 @app.command()
-def ingest() -> None:
-    """Parse PDFs into pages and chunk them. [P2–P3]"""
-    _not_yet("P2/P3")
+def ingest(
+    config: Path | None = ConfigOpt,
+    limit_docs: int | None = typer.Option(None, help="Only the first N documents (trial run)"),
+    workers: int = typer.Option(0, help="Processes: 0 = all cores, 1 = sequential"),
+    force: bool = typer.Option(False, help="Re-parse even if outputs are up to date"),
+) -> None:
+    """Parse PDFs into clean pages (pages.parquet). [P2] Chunking arrives in P3."""
+    from finsight.ingestion.pipeline import ingest_all
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    report = ingest_all(settings, limit_docs=limit_docs, workers=workers, force=force)
+    console.print(
+        f"docs={report.n_docs} pages={report.n_pages} empty={report.n_empty_pages} "
+        f"tables={report.n_table_pages} skipped={report.skipped} time={report.elapsed_s}s"
+    )
+    if report.failures:
+        for name, err in report.failures.items():
+            console.print(f"[red]✘ {name}: {err}[/]")
+        raise typer.Exit(1)
 
 
 @app.command()

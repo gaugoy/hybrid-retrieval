@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P1 (data) complete**: 150 questions, 84 SEC filings, 12,013 pages. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
+> Status: **P2 (ingestion) complete**: 12,013 pages parsed; 189/189 evidence passages found on their gold page. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -30,6 +30,7 @@ make test                  # fast test suite
 ```bash
 make data                                   # step 01: download FinanceBench (~166 MB, ~25 s)
 uv run python scripts/02_explore_data.py   # step 02: explore questions, evidence and consistency checks
+uv run python scripts/03_parse_pdfs.py     # step 03: parse PDFs into clean pages + evidence check (~70 s)
 ```
 
 ### Run any step three ways
@@ -50,7 +51,7 @@ Further steps are added phase by phase (`make ingest`, `make index`, ...). Datas
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, errors, container, CLI, observability, diagnostics
-scripts/          cell-based learning steps (00_check_env.py, 01_download_data.py, 02_explore_data.py)
+scripts/          cell-based learning steps (00_check_env … 03_parse_pdfs)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit tests (more integration tests from P4 on)
 docs/             spec, development guide, interview guide

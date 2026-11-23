@@ -597,40 +597,46 @@ tests/unit/test_financebench_loader.py    # uses a 3-row fixture JSONL
 **Goal:** turn every PDF into clean per-page text, with tables kept readable, plus document metadata. **Prove the parsing is correct** against the ground truth.
 **Concepts:** PDF text extraction, table handling, boilerplate removal, "garbage in, garbage out". See Interview Guide §P2.
 
-**Files**
+**Files (as built)**
 ```
 src/finsight/ingestion/__init__.py
-src/finsight/ingestion/pdf_parser.py   # parse_pdf(path) -> list[RawPage]
-src/finsight/ingestion/tables.py       # extract_tables(page) -> list[str]
-src/finsight/ingestion/cleaner.py      # clean_pages(raw_pages) -> list[Page]
-src/finsight/ingestion/pipeline.py     # ingest_all(settings) -> IngestReport ; writes pages.parquet, documents.parquet
-scripts/03_parse_pdfs.py
-tests/unit/test_cleaner.py
-tests/slow/test_evidence_pages.py      # @pytest.mark.slow
+src/finsight/ingestion/pdf_parser.py   # words → rows → lines: extract_words, group_rows, render_row, parse_pdf, plain_text
+src/finsight/ingestion/cleaner.py      # find_boilerplate, clean_page, join_hyphenation, clean_document
+src/finsight/ingestion/quality.py      # evidence_overlap (space-insensitive), label_number_adjacency, count_*
+src/finsight/ingestion/pipeline.py     # ingest_all -> IngestReport; pages/documents parquet + manifest; evidence_check
+scripts/03_parse_pdfs.py               # cell-based walkthrough of one page, then the whole corpus
+tests/unit/test_ingestion_units.py     # rows, currency, boilerplate, hyphenation, metrics
+tests/integration/test_ingest_pipeline.py  # generated PDFs: rows kept, header/footer removed, skip/force
+tests/slow/test_evidence_pages.py      # real data: ≥ 95% of evidence on the gold page, no offsets
 ```
 
-**Implementation notes**
-- Use `import pymupdf` (the old `import fitz` name is deprecated). Use `doc = pymupdf.open(path)`, then for each `i, page in enumerate(doc)`: `page.get_text("text")`.
-- Tables: `page.find_tables()` returns tables, and `table.extract()` gives rows. Render each table as `| a | b | c |` lines and replace the table's region in the text with them, or append them at the end of the page with a `[TABLE]` marker. Start simple (append), and measure the effect in P5.
-- `cleaner.py`:
-  - **Repeated header/footer removal:** a line that appears on more than 50% of the pages of a document (after normalizing digits to `#`) is boilerplate, so drop it.
-  - Join words hyphenated across a line break (`expendi-\ntures` → `expenditures`), collapse runs of whitespace, and keep paragraph breaks (`\n\n`).
-  - Keep the page even if it is empty (`n_chars == 0`), so the page indexes stay aligned with the ground truth. Log a warning for scanned or image-only pages.
-- Metadata comes from `load_document_meta()` (P1), **not** from parsing file names.
-- Run documents in parallel with `concurrent.futures.ProcessPoolExecutor` (PyMuPDF is safe per process). Show a tqdm progress bar.
+**Implementation notes (as built; see §7 for why this differs from the first draft)**
+- Use `import pymupdf` (not `fitz`). Text comes from `page.get_text("words")` (word + bounding box, ~3 ms/page).
+- **Row reconstruction instead of `find_tables()`:** group words into visual rows (|Δy| ≤ `row_tolerance_factor` × line height),
+  sort each row left → right, and insert ` | ` where the gap exceeds `column_gap_factor` × line height. A currency symbol
+  always attaches to the number after it (`| $ 5,363`). A vertical gap > `paragraph_gap_factor` × line height becomes a blank line.
+  `find_tables()` was measured at 1.5 s/page (≈5 h for the corpus) with cells that lost their spaces.
+- `cleaner.py`: header/footer = a **short** line (≤ 12 words), digits normalised to `#`, found in the top/bottom
+  `boilerplate_edge_lines` of ≥ `boilerplate_min_share` of the document's pages. Body repeats are never removed. Hyphenated
+  words are re-joined only when the next line starts lowercase and the line isn't a table row. Empty pages are kept.
+- `has_table` = at least `min_table_rows` lines with ≥ 2 cells and a number (a heuristic; cover pages with addresses can trigger it).
+- Settings live in `configs/base.yaml → ingestion` (part of the fingerprint). `PARSER_VERSION` in `pipeline.py` must be bumped
+  whenever parsing or cleaning logic changes, so the manifest forces a rebuild.
+- Metadata comes from `load_document_meta()` (P1), not from file names.
+- `workers=1` (default) is sequential, ~70 s for the corpus, and safe in notebooks and cell-based scripts. `workers=0` (all cores)
+  or `>1` uses processes, ~17 s; use it only from guarded entry points (`finsight ingest`, `make ingest`), because macOS
+  starts workers by re-importing the caller's main module.
 
-**Step script `scripts/03_parse_pdfs.py [--limit-docs N]`.** It prints:
-- docs parsed, total pages, empty pages, pages with tables, total chars, time taken
-- a per-doc table of the 10 largest docs (pages, chars)
-- **an evidence check:** for every FinanceBench evidence item, the overlap between the evidence text's tokens and the tokens of `pages[doc][page_idx]`. Print the share of items with overlap ≥ 0.8, and list the worst 5 for you to inspect.
-- one sample page before and after cleaning, side by side
+**Step script `scripts/03_parse_pdfs.py [--doc D --page-idx N] [--limit-docs N] [--force]`.** One page through every stage
+(plain baseline → words → rows → boilerplate → cleaned page), then the whole corpus, the outputs, the evidence check, and a
+plain-vs-ours label–number adjacency comparison on the evidence pages.
 
 **Done when**
-- [ ] `pages.parquet` exists, with one row per PDF page for all 84 docs
-- [ ] The evidence check passes for **≥ 95%** of evidence items (if not, investigate and record why in §7)
-- [ ] The cleaner's unit tests pass (header removal, hyphenation)
+- [x] `pages.parquet` exists, with one row per PDF page for all 84 docs (12,013 rows)
+- [x] The evidence check passes for **≥ 95%** of evidence items: measured **100%** (189/189, mean overlap 0.998, 0 page offsets)
+- [x] The cleaner's unit tests pass (header removal, hyphenation), plus integration tests on generated PDFs
 
-**Pitfalls:** the 0-based vs. printed page confusion (§1). Multi-column layouts can interleave text; check a few visually. Don't drop empty pages.
+**Pitfalls:** the 0-based vs. printed page confusion (§1). Two-column prose can merge into one row (rare in SEC filings). Don't drop empty pages. Comparing evidence text space-sensitively (FinanceBench's text lost spaces in places). Using `ProcessPoolExecutor` from a script without a `__main__` guard on macOS.
 
 **References:** [PyMuPDF text extraction](https://pymupdf.readthedocs.io/en/latest/recipes-text.html) · [PyMuPDF tables](https://pymupdf.readthedocs.io/en/latest/page.html#Page.find_tables) · [pypdf (BSD alternative)](https://pypdf.readthedocs.io/) · [SEC EDGAR filing types](https://www.sec.gov/edgar/search-and-access)
 
@@ -1074,7 +1080,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 |---|---|---|---|
 | P0 Scaffold | ✅ done (CI green) | 2026-11-23 | 29 unit tests, 81% coverage · lint + mypy clean · torch 2.15 with MPS on M5 · env check: 4 ok / 5 info / 1 warn (Ollama not installed yet) |
 | P1 Data | ✅ done | 2026-11-23 | 150 Q · 189 evidence items · 84 PDFs (166.5 MB, **12,013 pages**) · 32 companies · download 23 s, re-run 0.1 s · 0 consistency problems · 43 unit tests |
-| P2 Ingestion | ⬜ | | pages: · evidence-page check: % |
+| P2 Ingestion | ✅ done | 2026-11-24 | 12,013 pages (69 empty, 5,098 with tables, 40.4M chars) · **evidence on gold page 189/189 (100%)**, mean overlap 0.998, 0 offsets · label–number adjacency **0.28 → 0.97** vs plain extraction (160 numeric evidence pages) · 70 s sequential / 17 s on 6 processes · 96 header/footer patterns · 75 tests |
 | P3 Chunking | ⬜ | | chunks per strategy: |
 | P4 Indexing | ⬜ | | index time: · size: |
 | P5 Retrieval | ⬜ | | best config: · Recall@10: |
@@ -1095,6 +1101,12 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-24 | P2 | **Row reconstruction from word boxes instead of `page.find_tables()`**; no `tables.py` (logic lives in `pdf_parser.py`) | Measured `find_tables()` at 1.5 s/page (≈5 h for 12k pages) with cells that lost spaces and split numbers. Rows from `get_text("words")` take ~3 ms/page and raise label–number adjacency from 0.28 to 0.97 |
+| 2026-11-24 | P2 | **Contract change:** new `IngestionCfg` section (`ingestion:` in base.yaml), included in the fingerprint | Parsing settings change results, so they must be traceable |
+| 2026-11-24 | P2 | Evidence overlap compares **space-insensitively** (substring match on letters+digits) | FinanceBench's evidence text came from an older extractor that dropped spaces ("Netsales"); PyMuPDF 2.1 keeps them. A space-sensitive metric would penalise correct parsing |
+| 2026-11-24 | P2 | Header/footer candidates must be short (≤ 12 words) and at a page edge | A synthetic test with repeated body lines showed edge-only detection could empty pages; real headers are short |
+| 2026-11-24 | P2 | Sequential parsing by default (`workers=1`); processes only via the CLI | macOS starts workers by re-importing `__main__`; cell-based scripts have no main guard, so workers would re-run the script |
+| 2026-11-24 | P2 | Label–number adjacency reported only on pages with ≥ 5 numbers | On prose pages a single stray number gives a meaningless 0.0 |
 | 2026-11-23 | P1 | **Step scripts became cell-based** (`# %%`) and run three ways: terminal, VS Code cells, Jupyter (`notebooks/` generated by jupytext). New `finsight.notebook` helpers (`script_args`, `show`, `preview`, `step`). Added dev deps `jupytext`, `jupyterlab`. `tools/build_notebooks.py` gives cells fixed IDs (jupytext's CLI assigns random IDs, so every rebuild showed as a git diff) and presets the kernel; `make kernel` registers `.venv` as "Python 3.12 (finsight-rag)" | Requested by the user: run each step individually and see what happens inside, with pandas DataFrames. Typer was dropped from the scripts (the `finsight` CLI keeps it) |
 | 2026-11-23 | P1 | Data-card correction: the 50 unlabelled `question_reasoning` rows are the **novel-generated** questions | Found with the new `pd.crosstab` cell in step 02; the first draft wrongly said domain-relevant |
 | 2026-11-23 | P1 | `.gitignore` rules anchored to the project root (`/data/`, `/indexes/`, `/models/`) | The unanchored `data/` also matched the source package `src/finsight/data/`, which silently left the P1 code untracked. Watch for this with any new folder name: the parent repo's `.gitignore` has an unanchored `indexes/` (we use `indexing/` for code) and ignores `*.parquet` and `*.csv` anywhere, so test fixtures must be JSONL |

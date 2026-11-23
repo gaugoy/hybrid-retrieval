@@ -56,8 +56,9 @@ mix all three labels; metrics-generated are numerical (36) or extraction (14).
    `doc_period` 2023 and 2022. No question uses it. The loader keeps the first row and logs it at INFO.
 2. **Tables arrive one cell per line** in the evidence text, so a number is separated from its row label. P2 must
    rebuild table rows (`| label | 2023 | 2022 |`) so numbers stay next to their labels.
-3. **Some text has lost its spaces:** e.g. Corning's evidence reads `Netsales`, `Costofsales`. Check whether
-   PyMuPDF's extraction has the same problem (P2 evidence check); if it does, BM25 needs a fix there.
+3. **Some evidence text has lost its spaces:** e.g. Corning's evidence reads `Netsales`, `Costofsales`. **Resolved in P2:**
+   PyMuPDF 2.1 extracts these pages correctly (`Net sales | $ 11,303`); the problem is only in FinanceBench's stored
+   evidence text, so the evidence check compares space-insensitively.
 4. **Evidence is deep inside long filings:** page index median 51, max 303. By type: 10-K median page 56 (financial
    statements sit mid-document), 10-Q median 18, 8-K and earnings releases pages 0–13. Retrieval can't rely on the first pages.
 5. **Multi-evidence questions** (35 of 150) need two or three pages; Recall@k counts each evidence page.
@@ -69,3 +70,19 @@ mix all three labels; metrics-generated are numerical (36) or extraction (14).
 - **Retrieval (P5):** a retrieved chunk is relevant if `doc_name` matches and `page_start ≤ page_idx ≤ page_end`.
 - **Generation (P8):** numeric match against `gold_answer` for metric questions, plus an LLM judge for free-text answers.
 - **Small-sample caution:** 150 questions means a difference of 1–2 points is noise. Always report n per row.
+
+## Parsing results (P2, `scripts/03_parse_pdfs.py`)
+
+| Measure | Value |
+|---|---|
+| Pages parsed | 12,013 (every page kept, 0-based `page_idx`) |
+| Empty pages (no text layer) | 69, mostly `WALMART_2019_10K` (29) and `AMCOR_2020_10K` (10). No evidence page is empty |
+| Pages with tables (heuristic) | 5,098 (42%) |
+| Characters | 40.4 M (median 3,344 per page) |
+| Header/footer patterns removed | 96 across 84 documents (page numbers `##`, "table of contents", "item #", "part ii", …) |
+| **Evidence found on the gold page** | **189 / 189** (overlap ≥ 0.8; mean 0.998, worst 0.973); 0 page offsets |
+| Label–number adjacency on numeric evidence pages | plain PyMuPDF **0.28** → ours **0.97** (160 pages with ≥ 5 numbers) |
+| Time | ~70 s sequential, ~17 s with 6 processes (M5) |
+
+Known parsing limitations: two-column prose could merge into one row; some multi-line table labels still split from their
+numbers (e.g. `VERIZON_2021_10K` page 93, adjacency 0.57); `has_table` can fire on cover pages with addresses.

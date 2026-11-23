@@ -115,7 +115,7 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 - **Parsing quality caps retrieval quality.** If the number "1,577" is separated from "Purchases of property, plant and equipment", no retriever can recover it.
 - **Tables:** keep each row together, rendered as `| label | 2018 | 2017 |` text, so the numbers stay next to their labels and column headers.
 - **Boilerplate:** headers and footers repeated on every page add noise to BM25 and embeddings, so remove them by frequency.
-- **Validation:** I checked automatically that the gold evidence text appears on the page with the gold page number: 📌% did.
+- **Validation:** I checked automatically that the gold evidence text appears on the page with the gold page number: **189/189 (100%)**, mean overlap 0.998, no page offsets.
 
 **Most-asked questions**
 1. *"How do you handle tables in RAG?"*
@@ -124,6 +124,10 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
    → Detect pages with no text layer, then run OCR (Tesseract or a cloud OCR service) or use a vision-language model. Track OCR confidence and flag pages with low confidence.
 3. *"How did you verify that parsing works?"*
    → The evidence-page overlap test against the ground truth, plus a manual look at the worst 5 cases. That is a measurable check, not just eyeballing.
+
+**📌 Your numbers (P2):** 12,013 pages parsed in ~70 s (17 s on 6 cores) · evidence on gold page 189/189 · label–number adjacency **0.28 → 0.97** vs plain extraction · `find_tables()` rejected at 1.5 s/page.
+
+**A story worth telling (decision backed by measurement):** "The obvious tool was PyMuPDF's `find_tables()`. I measured it: 1.5 seconds per page, about 5 hours for the corpus, and its cells lost their spaces. I rebuilt table rows from word coordinates instead, ~3 ms per page, and defined a metric for what mattered: the share of numbers that stay on the same line as their label. It went from 0.28 to 0.97. I also found that the benchmark's own evidence text had lost spaces ('Netsales'), so I made the evidence check space-insensitive rather than penalise correct parsing."
 
 **Go deeper:** [PyMuPDF recipes](https://pymupdf.readthedocs.io/en/latest/recipes-text.html) · [Docling (IBM layout-aware parsing)](https://github.com/docling-project/docling) · [Unstructured](https://docs.unstructured.io/) · learn about **layout detection** and **multimodal RAG** (§7)
 
