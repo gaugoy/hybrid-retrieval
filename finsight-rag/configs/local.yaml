@@ -1,0 +1,11 @@
+# Local profile (the default): everything runs on this Mac, no API keys needed.
+# Merged on top of base.yaml.
+
+llm:
+  provider: ollama
+
+judge:
+  provider: ollama
+
+rerank:
+  provider: local
