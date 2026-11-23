@@ -45,6 +45,8 @@ dev = [
   "pre-commit>=3.7",
   "types-PyYAML",
   "ipykernel",
+  "jupytext>=1.19.7",
+  "jupyterlab>=4.6.6",
 ]
 
 [project.scripts]
@@ -70,11 +72,17 @@ explicit = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# notebooks/ are generated from scripts/ (make notebooks), which are linted instead.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
-# Allow en dashes and the info icon used in docstrings and CLI output.
-allowed-confusables = ["–", "ℹ"]
+# Allow en dashes, the info icon and × used in docstrings and output.
+allowed-confusables = ["–", "ℹ", "×"]
+
+[tool.ruff.lint.per-file-ignores]
+# Step scripts double as notebooks: a bare `P` at the end of a cell displays the parameters.
+"**/scripts/*.py" = ["B018"]
 
 [tool.ruff.lint.isort]
 # Hooks run ruff from the git root (the parent folder), where `finsight` would otherwise be

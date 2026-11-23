@@ -32,7 +32,7 @@
 
 1. Read the phase section here, then the matching section in [`INTERVIEW_GUIDE.md`](INTERVIEW_GUIDE.md).
 2. Build the phase yourself, or ask the agent: *"Implement phase P2 from docs/DEVELOPMENT_GUIDE.md."*
-3. **Run the phase's step script yourself** (`uv run python scripts/NN_*.py`) and read its output. Each script prints a "what just happened" summary and saves artifacts you can open.
+3. **Run the phase's step script yourself**: whole from the terminal (`uv run python scripts/NN_*.py`), cell by cell in VS Code (**Run Cell**), or as a notebook (`make notebooks && make jupyter`). Each cell does one internal step and shows its result as a DataFrame (see §3.3).
 4. Run the phase's checks (`make test`, plus the phase-specific command).
 5. Tick the phase in the [progress tracker](#6-progress-tracker), then commit.
 
@@ -40,7 +40,7 @@
 
 - **Work on one phase at a time**, in order. Don't start phase N+1 until the "Done when" checks for phase N pass.
 - **Follow the contracts in §4 exactly.** If a contract has to change, update §4 and add a row to the [decision log](#7-decision-and-deviation-log) in the same change.
-- **Keep the learning-script pattern:** every phase has a `scripts/NN_*.py` that a human runs by hand and that prints readable output. Library code lives in `src/finsight/`; scripts are thin wrappers around it.
+- **Keep the learning-script pattern (§3.3):** every phase has a cell-based `scripts/NN_*.py` that runs in the terminal, cell by cell in VS Code, or as a generated notebook. One cell per internal step, results as DataFrames. Library code lives in `src/finsight/`; scripts are thin. Run `make notebooks` after changing a script.
 - **No LangChain or LlamaIndex** (ADR-0002). Plain Python plus the libraries listed in §3.
 - **Nothing loads at import time:** no module reads data, loads models or opens connections when imported.
 - **Local by default:** every phase must work with no API keys. Cloud providers (Anthropic, Cohere) are optional and switched on by config.
@@ -159,47 +159,68 @@ addopts = "-m 'not slow'"
 - Raise specific errors: define `FinsightError` with subclasses `ConfigError`, `DataNotFoundError`, `IndexNotBuiltError`, `ProviderError` in `src/finsight/errors.py`. Error messages say **what to run** to fix the problem (for example `"BM25 index missing. Run: uv run python scripts/05_embed_and_index.py"`).
 - Paths always come from `Settings`. Never hard-code paths.
 
-### 3.3 The step-script pattern
+### 3.3 The step-script pattern (cells: terminal, VS Code, or Jupyter)
 
-Every `scripts/NN_name.py` follows this template:
+Every `scripts/NN_name.py` is a **cell-based script** (jupytext "percent" format). The same file runs three ways:
+
+| How | Command | Good for |
+|---|---|---|
+| Terminal, all at once | `uv run python scripts/NN_name.py --flag value` | quick runs, automation |
+| VS Code, cell by cell | open the file and click **Run Cell** above each `# %%` (Interactive Window) | stepping through, inspecting variables |
+| Jupyter notebook | `make notebooks` then `make jupyter` (opens `notebooks/NN_name.ipynb`) | exploring with rich DataFrame views |
+
+Rules for every step script:
+
+- **Each cell does one internal step** of the library and shows its result, so you can see what happens in the background.
+  Don't hide everything behind one call: expose the stages (e.g. P1 downloads one PDF by hand before the parallel batch).
+- **Show data as pandas DataFrames** with `finsight.notebook.show(df, "title")`: HTML in notebooks, plain text in the
+  terminal. Use `preview()` to shorten long text and `step("N. title")` to announce each stage.
+- **Parameters come from `script_args()`**: flags in the terminal (`limit_docs=Param(None, int)` becomes
+  `--limit-docs 3`), the defaults in a notebook (edit the cell to change them).
+- **Leave useful variables at the top level** (e.g. `qa_df`, `ev_df`, `report`) and list them in the opening markdown cell.
+- **Exit non-zero on failure only in the terminal** (`if not in_notebook(): raise SystemExit(1)`), so a notebook never dies.
+- Scripts are thin: all logic lives in `src/finsight/`; `finsight.notebook` is used only by scripts and notebooks.
+- `notebooks/*.ipynb` are **generated** (`make notebooks` runs `tools/build_notebooks.py`: no outputs, fixed cell IDs so rebuilds are byte-identical, kernel preset to `finsight-rag` from `make kernel`) and committed for GitHub readers. Never edit them
+  by hand; edit the script and regenerate. Ruff lints the scripts, not the notebooks.
+- `tests/unit/test_notebook_helpers.py` checks that every step script compiles, opens with a markdown cell, has at
+  least 4 cells, and uses `script_args()`.
+
+Template:
 
 ```python
-"""
-Step NN — <title>   (Phase PX)
+# %% [markdown]
+# # Step NN — <title>   (Phase PX)
+# **What this step does:** ...   **Three ways to run it:** ...   **Variables to explore afterwards:** `df1`, `report`
 
-WHAT THIS STEP DOES
-  <2–4 lines>
-
-WHAT TO LOOK AT AFTER RUNNING
-  - <artifact path>: <what's inside>
-  - <the printed table>: <what a good result looks like>
-
-RUN
-  uv run python scripts/NN_name.py [--limit 5] [--config configs/local.yaml]
-"""
-
-import typer
-from rich.console import Console
+# %%
+import pandas as pd
 from finsight.config import load_settings
+from finsight.notebook import Param, configure_pandas, in_notebook, preview, script_args, show, step
 
-app = typer.Typer(add_completion=False)
-console = Console()
+configure_pandas()
 
+# %% Parameters: in a notebook, edit the defaults here; in the terminal, use the flags.
+P = script_args(
+    "Step NN: <title>", config=Param(None, str, "profile YAML"), limit=Param(None, int, "...")
+)
+P
 
-@app.command()
-def main(config: str = "configs/local.yaml", limit: int | None = None) -> None:
-    settings = load_settings(config)
-    console.rule("[bold]Step NN — <title>")
-    # 1. call library functions from finsight.*
-    # 2. print a "WHAT JUST HAPPENED" summary: counts, timings, 1–3 samples, output paths
-    console.rule("[green]Done")
+# %% [markdown]
+# ## 1. <first internal step>: what happens and why
 
+# %%
+step("1. <first internal step>")
+settings = load_settings(P.config)
+first_df = ...  # call one library function
+show(first_df.head(), "first_df.head()")
 
-if __name__ == "__main__":
-    app()
+# %% Summary
+step("Summary")
+print("Next: scripts/NN+1_....py")
 ```
 
-The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as production commands (`finsight ingest`, `finsight index`, ...). Scripts are for learning and inspection; the CLI is for automation. **Both call the same library functions.**
+The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concise production commands (`finsight download`, ...).
+**Both call the same library functions.**
 
 ### 3.4 Configuration
 
@@ -514,7 +535,7 @@ finsight-rag/
 **Done when**
 - [x] `make setup && make lint && make test` pass
 - [x] `uv run python scripts/00_check_env.py` prints the table; `uv run finsight --help` lists the commands (stubs are fine)
-- [ ] CI is green on GitHub after a push (once the user pushes)
+- [x] CI is green on GitHub after a push
 
 **Pitfalls**
 - GitHub only reads workflows from the repo-root `.github/workflows/`. The `working-directory` default handles the subfolder.
@@ -561,9 +582,9 @@ tests/unit/test_financebench_loader.py    # uses a 3-row fixture JSONL
 - `docs/data_card.md` covers: source, license, counts (from the script), schema, page convention, known quirks you find, and how evaluation uses it.
 
 **Done when**
-- [ ] Re-running `01_download_data.py` skips everything (idempotent)
-- [ ] 84/84 PDFs are present; the data card has the real numbers
-- [ ] `test_financebench_loader.py` passes
+- [x] Re-running `01_download_data.py` skips everything (idempotent)
+- [x] 84/84 PDFs are present; the data card has the real numbers
+- [x] `test_financebench_loader.py` passes
 
 **Pitfalls:** don't use `datasets.load_dataset` here (a direct JSONL download is simpler and has no extra dependency). Some `doc_name`s contain characters that need URL quoting (use `urllib.parse.quote`).
 
@@ -1051,8 +1072,8 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 
 | Phase | Status | Date | Key numbers / notes |
 |---|---|---|---|
-| P0 Scaffold | ✅ done (CI pending first push) | 2026-11-23 | 29 unit tests, 81% coverage · lint + mypy clean · torch 2.15 with MPS on M5 · env check: 4 ok / 5 info / 1 warn (Ollama not installed yet) |
-| P1 Data | ⬜ | | expected: 150 Q, 84 docs, ~165 MB |
+| P0 Scaffold | ✅ done (CI green) | 2026-11-23 | 29 unit tests, 81% coverage · lint + mypy clean · torch 2.15 with MPS on M5 · env check: 4 ok / 5 info / 1 warn (Ollama not installed yet) |
+| P1 Data | ✅ done | 2026-11-23 | 150 Q · 189 evidence items · 84 PDFs (166.5 MB, **12,013 pages**) · 32 companies · download 23 s, re-run 0.1 s · 0 consistency problems · 43 unit tests |
 | P2 Ingestion | ⬜ | | pages: · evidence-page check: % |
 | P3 Chunking | ⬜ | | chunks per strategy: |
 | P4 Indexing | ⬜ | | index time: · size: |
@@ -1074,6 +1095,13 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-23 | P1 | **Step scripts became cell-based** (`# %%`) and run three ways: terminal, VS Code cells, Jupyter (`notebooks/` generated by jupytext). New `finsight.notebook` helpers (`script_args`, `show`, `preview`, `step`). Added dev deps `jupytext`, `jupyterlab`. `tools/build_notebooks.py` gives cells fixed IDs (jupytext's CLI assigns random IDs, so every rebuild showed as a git diff) and presets the kernel; `make kernel` registers `.venv` as "Python 3.12 (finsight-rag)" | Requested by the user: run each step individually and see what happens inside, with pandas DataFrames. Typer was dropped from the scripts (the `finsight` CLI keeps it) |
+| 2026-11-23 | P1 | Data-card correction: the 50 unlabelled `question_reasoning` rows are the **novel-generated** questions | Found with the new `pd.crosstab` cell in step 02; the first draft wrongly said domain-relevant |
+| 2026-11-23 | P1 | `.gitignore` rules anchored to the project root (`/data/`, `/indexes/`, `/models/`) | The unanchored `data/` also matched the source package `src/finsight/data/`, which silently left the P1 code untracked. Watch for this with any new folder name: the parent repo's `.gitignore` has an unanchored `indexes/` (we use `indexing/` for code) and ignores `*.parquet` and `*.csv` anywhere, so test fixtures must be JSONL |
+| 2026-11-23 | P1 | **Contract change:** added `EvalRecord.question_reasoning: str | None = None` | Lets P5/P8 break results down by reasoning type (numerical vs. extraction) |
+| 2026-11-23 | P1 | Added `validate_dataset()` and a download manifest (size + SHA-256 per file) | Consistency checks between questions, metadata and PDFs; proof of exactly which data produced the results |
+| 2026-11-23 | P1 | The duplicate `FOOTLOCKER_2023_annualreport` metadata row: keep the first, log at INFO | Known upstream quirk; no question uses that doc (see data_card.md) |
+| 2026-11-23 | P1 | Skipped the optional `notebooks/01_explore_financebench.ipynb` | `scripts/02_explore_data.py` covers the same exploration and runs in CI-friendly form |
 | 2026-11-23 | P0 | **Installed versions are newer than this guide assumed:** torch 2.15, sentence-transformers 6.3, transformers 5.24, pymupdf 2.1, qdrant-client 1.20, anthropic 2.12, fastapi 0.165 | Locked in `uv.lock`. Re-check the library calls in P2 (pymupdf), P4 (sentence-transformers, qdrant `query_points`) and P6 (anthropic) against the current docs before relying on them |
 | 2026-11-23 | P0 | Config uses pydantic models + an explicit deep merge + `python-dotenv`, not `pydantic-settings` sources | The YAML → profile → env-alias → `FINSIGHT__` → override chain is easier to read and test as one explicit function. Secrets are a separate `Secrets` model (SecretStr), excluded from dumps and the fingerprint |
 | 2026-11-23 | P0 | Fingerprint covers only result-affecting sections (dataset, chunking, embedding, retrieval, rerank, pipeline, generation, llm, judge) | Paths, API and logging settings are machine-specific and must not change the result hash |
@@ -1093,6 +1121,7 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 |---|---|---|
 | `torch` wheel install fails | Python 3.13/3.14 in use | `uv python pin 3.12 && uv sync` |
 | `warning: VIRTUAL_ENV=.../hybrid-retrieval/venv does not match ... .venv` | The parent experiment's venv is still activated in your shell | Harmless (uv ignores it). Run `deactivate`, or open a new terminal |
+| New source folder missing from `git status` | A `.gitignore` pattern matches its name | `git check-ignore -v <path>` shows which rule; anchor the rule with a leading `/` |
 | VS Code says packages are "not installed" | The editor is using the parent `venv` interpreter | Cmd+Shift+P → "Python: Select Interpreter" → `finsight-rag/.venv/bin/python` |
 | Embedding runs on CPU | MPS not detected | Check `torch.backends.mps.is_available()`; update macOS or torch |
 | `RuntimeError: Storage folder ... is already accessed by another instance of Qdrant client` | Embedded Qdrant lock | Stop the other process, or run Qdrant in Docker and set `QDRANT_URL` |

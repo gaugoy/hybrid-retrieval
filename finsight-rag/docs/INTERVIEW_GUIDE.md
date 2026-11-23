@@ -101,7 +101,9 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 3. *"How would you build an eval set for a new domain without labels?"*
    → Sample real user questions, have experts label the evidence, add LLM-generated questions *written from* chunks (with a filter), include adversarial and unanswerable questions, and grow it with every bug found in production.
 
-**📌 Your numbers:** questions 150 · docs 84 · total pages 📌 · question types 50/50/50
+**📌 Your numbers:** questions 150 · evidence items 189 · docs 84 (64 10-K, 8 10-Q, 6 8-K, 6 earnings) · **12,013 pages** · 166.5 MB · 32 companies · question types 50/50/50 · 35 questions need 2–3 evidence pages
+
+**A story worth telling:** "Before writing any retrieval code I verified the page convention: the benchmark's evidence pages are 0-based and match PyMuPDF's index. Getting that wrong by one page would have silently made every retrieval metric wrong." Also mention the quirks in `docs/data_card.md` (tables one cell per line, missing spaces in some text): they show you looked at the data before modelling it.
 
 **Go deeper:** [FinanceBench paper](https://arxiv.org/abs/2311.11944) (read §3 and the results comparing a shared vector store with per-document stores) · [BEIR](https://arxiv.org/abs/2104.08663) · [Datasheets for Datasets](https://arxiv.org/abs/1803.09010)
 

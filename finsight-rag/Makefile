@@ -2,7 +2,7 @@
 # Every target runs inside the uv-managed environment (.venv, Python 3.12).
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks check-env lint fmt test test-slow data ingest index eval-retrieval eval serve ui clean-cache
+.PHONY: help setup hooks check-env lint fmt test test-slow notebooks kernel jupyter data ingest index eval-retrieval eval serve ui clean-cache
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -31,6 +31,15 @@ test: ## fast tests (no real models / data) with coverage
 
 test-slow: ## tests that need real models or the full dataset
 	uv run pytest -m slow
+
+notebooks: ## regenerate notebooks/*.ipynb from the cell-based scripts/*.py (deterministic, no outputs)
+	uv run python tools/build_notebooks.py
+
+kernel: ## register .venv as the Jupyter kernel "Python 3.12 (finsight-rag)" (for VS Code / Jupyter)
+	uv run python -m ipykernel install --user --name finsight-rag --display-name "Python 3.12 (finsight-rag)"
+
+jupyter: ## open JupyterLab in notebooks/ (uses this project's .venv kernel)
+	uv run jupyter lab notebooks/
 
 data: ## P1: download FinanceBench
 	uv run python scripts/01_download_data.py

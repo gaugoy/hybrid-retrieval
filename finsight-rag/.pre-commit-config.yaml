@@ -23,13 +23,13 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check (finsight-rag)
-        entry: uv run --project finsight-rag ruff check --fix --config finsight-rag/pyproject.toml
+        entry: uv run --project finsight-rag ruff check --fix --force-exclude --config finsight-rag/pyproject.toml
         language: system
         types: [python]
         files: ^finsight-rag/
       - id: ruff-format
         name: ruff format (finsight-rag)
-        entry: uv run --project finsight-rag ruff format --config finsight-rag/pyproject.toml
+        entry: uv run --project finsight-rag ruff format --force-exclude --config finsight-rag/pyproject.toml
         language: system
         types: [python]
         files: ^finsight-rag/

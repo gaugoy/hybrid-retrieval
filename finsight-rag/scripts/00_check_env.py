@@ -1,79 +1,108 @@
-"""
-Step 00 — Check the environment   (Phase P0)
+# %% [markdown]
+# # Step 00 — Check the environment   (Phase P0)
+#
+# **What this step does:** loads the layered config (`base.yaml` + profile + `.env` + environment)
+# and checks everything FinSight needs: Python 3.12, PyTorch with the Apple GPU (MPS), key
+# packages, data/index folders, the local Ollama server and model, and (optionally) API keys.
+#
+# **Three ways to run it**
+# - Terminal, all at once: `uv run python scripts/00_check_env.py [--config configs/cloud.yaml]`
+# - VS Code, cell by cell: click **Run Cell** above each `# %%` (the Interactive Window keeps
+#   every variable)
+# - Jupyter: `make notebooks`, then open `notebooks/00_check_env.ipynb`
+#
+# **What to look at:** `fail` rows must be fixed; `warn` = optional feature off (e.g. Ollama,
+# needed from P6); `info` = not needed yet. Then see how the config **fingerprint** reacts to a
+# changed setting.
 
-WHAT THIS STEP DOES
-  Loads the layered config (base.yaml + profile + .env + environment) and checks everything
-  FinSight needs: Python 3.12, PyTorch with the Apple GPU (MPS), key packages, data/index
-  folders, the local Ollama server and model, and (optionally) API keys.
-
-WHAT TO LOOK AT AFTER RUNNING
-  - The table: "fail" rows must be fixed before continuing. "warn" means an optional feature
-    is off (for example Ollama, which you need from P6). "info" means "not needed yet".
-  - The config fingerprint: change a value (e.g. FINSIGHT__CHUNKING__CHUNK_TOKENS=256) and
-    run again. The fingerprint changes, which is how results stay traceable to their config.
-  - The resolved settings summary: what the pipeline *would* build with this config.
-
-RUN
-  uv run python scripts/00_check_env.py
-  uv run python scripts/00_check_env.py --config configs/cloud.yaml
-  FINSIGHT__CHUNKING__CHUNK_TOKENS=256 uv run python scripts/00_check_env.py
-"""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-import typer
-from rich.console import Console
-from rich.table import Table
+# %%
+import pandas as pd
 
 from finsight.config import ENV_ALIASES, load_settings
 from finsight.container import Container
-from finsight.diagnostics import render_checks, run_all_checks
+from finsight.diagnostics import run_all_checks
+from finsight.notebook import Param, configure_pandas, in_notebook, script_args, show, step
 
-app = typer.Typer(add_completion=False)
-console = Console()
+configure_pandas()
 
+# %% Parameters: in a notebook, edit the defaults here; in the terminal, use the flags.
+P = script_args(
+    "Step 00: check the environment",
+    config=Param(None, str, "profile YAML (default: configs/local.yaml)"),
+)
+P
 
-@app.command()
-def main(
-    config: Path | None = typer.Option(None, help="Profile YAML (default configs/local.yaml)"),
-) -> None:
-    console.rule("[bold]Step 00 — Check the environment")
+# %% [markdown]
+# ## 1. Load the layered configuration
+# `load_settings()` merges `configs/base.yaml` ← profile ← `.env`/environment ← overrides,
+# validates every value, and resolves paths against the project root.
 
-    # 1. Load the layered configuration.
-    settings = load_settings(config)
+# %%
+step("1. Load the layered configuration")
+settings = load_settings(P.config)
+show(
+    pd.Series(
+        {
+            "project root": str(settings.root),
+            "profile": str(settings.config_path.relative_to(settings.root)),
+            "fingerprint": settings.fingerprint(),
+            "env aliases read": ", ".join(ENV_ALIASES) + ", plus any FINSIGHT__SECTION__KEY",
+        }
+    ),
+    "Resolved config",
+)
 
-    # 2. Run every check and print the table.
-    results = run_all_checks(settings)
-    render_checks(results, console)
+# %% [markdown]
+# ## 2. Run every environment check
+# Each check returns a `CheckResult(name, status, detail, hint)`. Here they become a DataFrame.
 
-    # 3. WHAT JUST HAPPENED: explain the config that was resolved.
-    console.rule("[bold]What just happened")
-    console.print(
-        f"Project root     : {settings.root}\n"
-        f"Profile          : {settings.config_path}  (merged on top of configs/base.yaml)\n"
-        f"Fingerprint      : [bold]{settings.fingerprint()}[/]"
-        "  (hash of every result-affecting setting)\n"
-        f"Env aliases read : {', '.join(ENV_ALIASES)}, plus any FINSIGHT__SECTION__KEY"
-    )
-    summary = Table(title="What the pipeline would build with this config", header_style="bold")
-    summary.add_column("Component")
-    summary.add_column("Setting")
-    for key, value in Container(settings).describe().items():
-        summary.add_row(key, value)
-    console.print(summary)
+# %%
+step("2. Run every environment check")
+results = run_all_checks(settings)
+checks_df = pd.DataFrame([r.__dict__ for r in results])
+show(checks_df, "Environment checks")
+show(checks_df["status"].value_counts(), "Status counts")
 
-    counts = {s: sum(r.status == s for r in results) for s in ("ok", "info", "warn", "fail")}
-    console.print(
-        f"Result: [green]{counts['ok']} ok[/] · [blue]{counts['info']} info[/] · "
-        f"[yellow]{counts['warn']} warn[/] · [red]{counts['fail']} fail[/]"
-    )
-    if counts["fail"]:
-        console.rule("[red]Fix the failing checks above, then run again")
-        raise typer.Exit(1)
-    console.rule("[green]Done: ready for P1 (uv run python scripts/01_download_data.py)")
+# %% [markdown]
+# ## 3. What would the pipeline build with this config?
+# The `Container` builds every component from one `Settings` object, so the API, the scripts
+# and the evaluation always use the same pipeline.
 
+# %%
+step("3. What the pipeline would build")
+show(pd.Series(Container(settings).describe()), "Container.describe()")
 
-if __name__ == "__main__":
-    app()
+# %% [markdown]
+# ## 4. Experiment: how the fingerprint tracks settings
+# Change a setting that affects results (chunk size) and one that doesn't (log level). Only the
+# first changes the fingerprint. That's how every index and eval result stays traceable to its
+# config.
+
+# %%
+step("4. Fingerprint experiment")
+variants = {
+    "as loaded": settings,
+    "chunk_tokens=256": load_settings(P.config, {"chunking": {"chunk_tokens": 256}}),
+    "logging.level=DEBUG": load_settings(P.config, {"logging": {"level": "DEBUG"}}),
+}
+fingerprints_df = pd.DataFrame(
+    [
+        {
+            "variant": name,
+            "fingerprint": s.fingerprint(),
+            "same as loaded": s.fingerprint() == settings.fingerprint(),
+        }
+        for name, s in variants.items()
+    ]
+)
+show(fingerprints_df, "Fingerprints")
+
+# %% Summary
+step("Summary")
+n_fail = int((checks_df["status"] == "fail").sum())
+if n_fail:
+    print(f"{n_fail} failing check(s): fix them (see the 'hint' column), then run again.")
+    if not in_notebook():
+        raise SystemExit(1)
+else:
+    print("Ready for P1: uv run python scripts/01_download_data.py")

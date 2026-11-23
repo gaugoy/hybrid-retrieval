@@ -1,0 +1,5 @@
+{"doc_name": "ACME_2020_10K", "company": "Acme", "gics_sector": "Industrials", "doc_type": "10k", "doc_period": 2020, "doc_link": "https://example.com/acme2020.pdf"}
+{"doc_name": "ACME_2021_10K", "company": "Acme", "gics_sector": "Industrials", "doc_type": "10k", "doc_period": 2021, "doc_link": "https://example.com/acme2021.pdf"}
+{"doc_name": "BETA_2019_10Q", "company": "Beta", "gics_sector": "Financials", "doc_type": "10q", "doc_period": 2019, "doc_link": "https://example.com/beta2019q.pdf"}
+{"doc_name": "UNUSED_2018_annualreport", "company": "Unused", "gics_sector": "Energy", "doc_type": "10k_annualreport", "doc_period": 2018, "doc_link": "https://example.com/u.pdf"}
+{"doc_name": "UNUSED_2018_annualreport", "company": "Unused", "gics_sector": "Energy", "doc_type": "10k_annualreport", "doc_period": 2017, "doc_link": "https://example.com/u.pdf"}

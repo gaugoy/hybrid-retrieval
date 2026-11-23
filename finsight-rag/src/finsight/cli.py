@@ -57,9 +57,27 @@ def _not_yet(phase: str) -> None:
 
 
 @app.command()
-def download() -> None:
+def download(
+    config: Path | None = ConfigOpt,
+    limit_docs: int | None = typer.Option(None, help="Only the first N PDFs (trial run)"),
+    force: bool = typer.Option(False, help="Re-download even if files exist"),
+) -> None:
     """Download FinanceBench (Q&A, doc metadata, referenced PDFs). [P1]"""
-    _not_yet("P1")
+    from finsight.data.download import download_financebench
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    report = download_financebench(settings, limit_docs=limit_docs, force=force)
+    console.print(
+        f"questions={report.n_questions} docs={report.n_docs_needed} "
+        f"downloaded={report.n_downloaded} skipped={report.n_skipped} "
+        f"on_disk={report.bytes_on_disk / 1e6:.1f}MB time={report.elapsed_s}s"
+    )
+    if not report.ok:
+        for name, err in report.failures.items():
+            console.print(f"[red]✘ {name}: {err}[/]")
+        raise typer.Exit(1)
 
 
 @app.command()
