@@ -4,12 +4,12 @@
 !.env.example
 
 # Generated data and indexes (re-create with `make data ingest index`)
-data/
-indexes/
-models/
+/data/
+/indexes/
+/models/
 
 # Eval outputs: keep the reports and configs, ignore bulky per-question logs
-results/**/*.jsonl
+/results/**/*.jsonl
 
 # Python / tooling
 .venv/

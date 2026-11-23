@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P0 (scaffold) complete**. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
+> Status: **P1 (data) complete**: 150 questions, 84 SEC filings, 12,013 pages. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -27,14 +27,31 @@ make check-env             # step 00: verify Python, Apple GPU (MPS), packages, 
 make test                  # fast test suite
 ```
 
-Further steps are added phase by phase (`make data`, `make ingest`, `make index`, ...).
+```bash
+make data                                   # step 01: download FinanceBench (~166 MB, ~25 s)
+uv run python scripts/02_explore_data.py   # step 02: explore questions, evidence and consistency checks
+```
+
+### Run any step three ways
+
+| How | Command |
+|---|---|
+| Terminal, all at once | `uv run python scripts/01_download_data.py --limit-docs 3` |
+| VS Code, cell by cell | open a script, click **Run Cell** above each `# %%`; variables stay in the Interactive Window |
+| Jupyter | `make notebooks && make jupyter`, then open `notebooks/01_download_data.ipynb` |
+| VS Code notebook | `make kernel` once, open a `.ipynb`, **Select Kernel** → Jupyter Kernel → **Python 3.12 (finsight-rag)** |
+
+Each cell runs one internal step and shows the result as a pandas DataFrame.
+
+Further steps are added phase by phase (`make ingest`, `make index`, ...). Dataset details: [`docs/data_card.md`](docs/data_card.md).
 
 ## Project layout (so far)
 
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, errors, container, CLI, observability, diagnostics
-scripts/          hand-run learning steps (00_check_env.py, ...)
+scripts/          cell-based learning steps (00_check_env.py, 01_download_data.py, 02_explore_data.py)
+notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit tests (more integration tests from P4 on)
 docs/             spec, development guide, interview guide
 ```

@@ -31,7 +31,11 @@ class Container:
         """A short summary of what this container would build: handy for logs and /v1/config."""
         s = self.settings
         return {
-            "config": str(s.config_path),
+            "config": str(
+                s.config_path.relative_to(s.root)
+                if s.config_path and s.config_path.is_relative_to(s.root)
+                else s.config_path
+            ),
             "fingerprint": s.fingerprint(),
             "dataset": s.dataset,
             "chunking": f"{s.chunking.strategy}/{s.chunking.chunk_tokens}",

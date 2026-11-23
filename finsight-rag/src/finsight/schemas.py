@@ -103,6 +103,7 @@ class EvalRecord(BaseModel):
     question: str
     gold_answer: str | None  # None = unanswerable (MultiHop null queries)
     question_type: str
+    question_reasoning: str | None = None  # e.g. "Numerical reasoning" (FinanceBench only)
     company: str | None
     doc_name: str | None
     evidence: list[Evidence]
