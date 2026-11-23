@@ -1,0 +1,13 @@
+# Cloud profile: Claude generates the answers and judges them. Retrieval stays local.
+# Needs ANTHROPIC_API_KEY in the environment or .env.
+# Merged on top of base.yaml.
+
+llm:
+  provider: anthropic
+  anthropic_model: claude-opus-5-5
+  anthropic_effort: medium
+
+judge:
+  provider: anthropic
+  anthropic_model: claude-haiku-5-5
+  anthropic_effort: low

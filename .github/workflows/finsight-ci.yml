@@ -1,0 +1,47 @@
+# CI for the finsight-rag/ project.
+# GitHub only reads workflows from the repository root, so this file lives here and every step
+# runs inside finsight-rag/ (see `defaults.run.working-directory`).
+name: finsight-ci
+
+on:
+  push:
+    paths: ["finsight-rag/**", ".github/workflows/finsight-ci.yml"]
+  pull_request:
+    paths: ["finsight-rag/**", ".github/workflows/finsight-ci.yml"]
+
+concurrency:
+  group: finsight-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: finsight-rag
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to a full tag: setup-uv publishes no moving major tag such as `v10`.
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: finsight-rag/uv.lock
+
+      - name: Install Python 3.12 and dependencies (CPU-only torch on Linux)
+        run: |
+          uv python install 3.12
+          uv sync --all-extras --frozen
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type-check (mypy)
+        run: uv run mypy src
+
+      - name: Tests (fast; slow tests need real models/data and run locally)
+        run: uv run pytest --cov=finsight --cov-report=term-missing

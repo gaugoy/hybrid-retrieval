@@ -1,0 +1,35 @@
+# pre-commit hooks for finsight-rag.
+# The git root is the parent folder (hybrid-retrieval/), so hooks run from there and only touch
+# files under finsight-rag/. Install with: make hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: ^finsight-rag/
+      - id: end-of-file-fixer
+        files: ^finsight-rag/
+      - id: check-yaml
+        files: ^finsight-rag/
+      - id: check-toml
+        files: ^finsight-rag/
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+        files: ^finsight-rag/
+      - id: detect-private-key
+        files: ^finsight-rag/
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (finsight-rag)
+        entry: uv run --project finsight-rag ruff check --fix --config finsight-rag/pyproject.toml
+        language: system
+        types: [python]
+        files: ^finsight-rag/
+      - id: ruff-format
+        name: ruff format (finsight-rag)
+        entry: uv run --project finsight-rag ruff format --config finsight-rag/pyproject.toml
+        language: system
+        types: [python]
+        files: ^finsight-rag/

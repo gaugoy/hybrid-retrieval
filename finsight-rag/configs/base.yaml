@@ -1,0 +1,87 @@
+# FinSight RAG: default configuration.
+#
+# Every other config file (local.yaml, cloud.yaml, experiments/*.yaml) is deep-merged ON TOP of this one.
+# Precedence (lowest → highest):
+#   base.yaml  <  the chosen YAML  <  environment variables  <  overrides passed in code / CLI
+#
+# Secrets (API keys) never live here. They come from the environment or .env (see .env.example).
+# Relative paths are resolved against the project root (the folder that contains configs/).
+
+dataset: financebench
+
+paths:
+  data_dir: data
+  raw_dir: data/raw
+  pdf_dir: data/raw/pdfs
+  processed_dir: data/processed
+  chunks_dir: data/chunks
+  index_dir: indexes
+  qdrant_dir: indexes/qdrant
+  bm25_dir: indexes/bm25
+  embed_cache_dir: indexes/embed_cache
+  results_dir: results
+
+chunking:
+  strategy: page_aware          # fixed | recursive | page_aware | parent_child
+  chunk_tokens: 384             # bge models accept at most 512 tokens; leave room for a context header
+  overlap_tokens: 64
+  child_tokens: 200             # parent_child only
+  parent_tokens: 1500           # parent_child only (what the LLM sees)
+  contextual_headers: false     # P7: prepend "company | doc | page" before embedding
+
+embedding:
+  model: BAAI/bge-small-en-v1.5
+  device: auto                  # auto | mps | cuda | cpu
+  batch_size: 64
+  query_instruction: "Represent this sentence for searching relevant passages: "
+
+vector_store:
+  qdrant_url: null              # null = embedded mode at paths.qdrant_dir; set a URL for Docker/server
+
+retrieval:
+  mode: hybrid                  # dense | sparse | hybrid
+  candidate_k: 50               # how many candidates each retriever returns before fusion/rerank
+  top_k: 10
+  rrf_k: 60
+  use_metadata_filter: true
+  filter_fields: [company]      # add doc_period to test a hard year filter (ablation)
+  query_transform: none         # none | multi_query | hyde | decompose
+
+rerank:
+  provider: local               # none | local | cohere
+  model: BAAI/bge-reranker-base
+  top_n: 8
+  cohere_model: rerank-v4.0-fast
+
+pipeline: hybrid_rerank         # naive | hybrid_rerank | corrective | agentic
+
+generation:
+  max_context_tokens: 6000
+  max_answer_tokens: 1024
+  abstain_phrase: "Not found in the provided filings."
+
+llm:
+  provider: ollama              # ollama | anthropic
+  ollama_base_url: http://localhost:11434
+  ollama_model: qwen2.5:7b-instruct
+  ollama_num_ctx: 8192          # Ollama's default context is small and silently truncates RAG prompts
+  anthropic_model: claude-opus-5-5
+  anthropic_effort: medium      # low | medium | high
+  timeout_s: 120
+
+judge:
+  provider: ollama              # ollama | anthropic (cloud.yaml switches to anthropic)
+  ollama_model: qwen2.5:7b-instruct
+  anthropic_model: claude-haiku-5-5
+  anthropic_effort: low
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  warmup: false
+  max_question_chars: 1000
+  cors_origins: ["http://localhost:8501"]
+
+logging:
+  level: INFO
+  json_format: false            # true in Docker/production (one JSON object per line)

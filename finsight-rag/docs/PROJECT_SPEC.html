@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinSight RAG — Project Spec &amp; Roadmap</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1f; --muted: #5f6368; --line: #e3e3df;
+    --accent: #2f5fd0; --accent-soft: #e8eefc; --ok: #1e7f4f; --ok-soft: #e4f4ec;
+    --warn: #9a6400; --warn-soft: #fdf3dc; --bad: #b3261e; --code: #f1f1ee;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --panel: #1d1d20; --ink: #ececee; --muted: #a0a0a8; --line: #303036;
+      --accent: #7da2ff; --accent-soft: #1f2a44; --ok: #5cc98f; --ok-soft: #173225;
+      --warn: #e7b450; --warn-soft: #3a2e14; --bad: #ff8a80; --code: #26262b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+  .layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+  nav { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 28px 20px;
+        border-right: 1px solid var(--line); background: var(--panel); }
+  nav .brand { font-weight: 700; font-size: 18px; margin-bottom: 4px; }
+  nav .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  nav a { display: block; color: var(--muted); text-decoration: none; font-size: 14px;
+          padding: 5px 8px; border-radius: 6px; }
+  nav a:hover { background: var(--accent-soft); color: var(--accent); }
+  main { padding: 40px 56px 96px; max-width: 1100px; }
+  header.hero { padding: 8px 0 28px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
+  .hero h1 { font-size: 34px; line-height: 1.2; margin: 0 0 10px; letter-spacing: -0.02em; }
+  .hero p.lead { font-size: 18px; color: var(--muted); margin: 0 0 16px; max-width: 780px; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 10px;
+          border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin: 0 6px 6px 0; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  section { margin: 0 0 56px; scroll-margin-top: 24px; }
+  h2 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p.intro { color: var(--muted); margin-top: 0; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .card h4 { margin: 0 0 6px; font-size: 15px; }
+  .card p, .card li { font-size: 14.5px; }
+  .card ul { padding-left: 18px; margin: 6px 0 0; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft);
+             padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 16px 0; font-size: 15px; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 12px; overflow: hidden; font-size: 14.5px; margin: 12px 0; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--code); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  tr:last-child td { border-bottom: none; }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--code); padding: 1px 5px; border-radius: 4px; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--code);
+        border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; overflow-x: auto; margin: 12px 0; }
+  pre .c { color: var(--muted); }
+  /* pipeline diagram */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 14px 0 6px; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+          min-width: 118px; flex: 1; font-size: 13px; }
+  .step b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .step span { color: var(--muted); }
+  .step.hl { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .arrow { display: flex; align-items: center; padding: 0 6px; color: var(--muted); font-size: 18px; }
+  .lane-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+                letter-spacing: 0.06em; margin-top: 18px; }
+  /* phases */
+  details.phase { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                  margin: 12px 0; overflow: hidden; }
+  details.phase summary { cursor: pointer; list-style: none; padding: 16px 20px; display: flex;
+                          gap: 14px; align-items: baseline; }
+  details.phase summary::-webkit-details-marker { display: none; }
+  details.phase summary .ph { font-family: var(--mono); font-weight: 700; color: var(--accent); min-width: 34px; }
+  details.phase summary .t { font-weight: 650; flex: 1; }
+  details.phase summary .d { font-size: 13px; color: var(--muted); }
+  details.phase[open] summary { border-bottom: 1px solid var(--line); }
+  details.phase .body { padding: 6px 22px 18px; font-size: 14.5px; }
+  details.phase .body h5 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase;
+                           letter-spacing: 0.05em; color: var(--muted); }
+  details.phase .body ul { margin: 4px 0; padding-left: 20px; }
+  .tag { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
+         background: var(--code); color: var(--muted); margin-left: 6px; }
+  .tree { white-space: pre; }
+  .tree .d { color: var(--accent); font-weight: 600; }
+  .tree .c { color: var(--muted); }
+  footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    nav { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 28px 20px 64px; }
+    .g2, .g3 { grid-template-columns: 1fr; }
+  }
+  @media print { nav { display: none; } .layout { display: block; } details.phase { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">FinSight RAG</div>
+  <div class="sub">Project spec &amp; roadmap · v0.1 draft</div>
+  <a href="#summary">0 · One-page summary</a>
+  <a href="#experiment">1 · Experiment → Product</a>
+  <a href="#problem">2 · Problem statement</a>
+  <a href="#data">3 · Dataset</a>
+  <a href="#topics">4 · RAG topics covered</a>
+  <a href="#models">5 · Models &amp; stack</a>
+  <a href="#arch">6 · Architecture</a>
+  <a href="#tree">7 · Folder structure</a>
+  <a href="#config">8 · Config &amp; keys</a>
+  <a href="#roadmap">9 · Roadmap (phases)</a>
+  <a href="#eval">10 · Evaluation plan</a>
+  <a href="#prod">11 · Production readiness</a>
+  <a href="#git">12 · Git &amp; CI workflow</a>
+  <a href="#interview">13 · Interview narrative</a>
+  <a href="#risks">14 · Risks</a>
+  <a href="#open">15 · Open decisions</a>
+  <a href="DEVELOPMENT_GUIDE.md">→ Development guide</a>
+  <a href="INTERVIEW_GUIDE.md">→ Interview guide</a>
+</nav>
+
+<main>
+<header class="hero">
+  <span class="pill">Draft for review</span><span class="pill ok">Local-first</span><span class="pill warn">Claude optional</span>
+  <h1>FinSight RAG<br>Grounded Q&amp;A over SEC financial filings</h1>
+  <p class="lead">An end-to-end, production-style Retrieval-Augmented Generation system that answers analyst questions
+    about public-company 10-K / 10-Q filings with page-level citations. It runs fully on a MacBook with local
+    embeddings and a local LLM, and switches to Claude by changing one config value.</p>
+  <p style="font-size:14px;color:var(--muted);margin:0">Builds on the <code>hybrid-retrieval</code> experiment (BM25 + dense + RRF + rerank on FiQA) in the parent folder.
+    This project is fully independent: its own package, data, indexes, utilities, tests and docs.</p>
+</header>
+
+<!-- 0 -->
+<section id="summary">
+  <h2><span class="num">0</span>One-page summary</h2>
+  <div class="grid g3">
+    <div class="card"><h4>Problem</h4><p>Analysts spend hours searching 100–300-page filings for one number or risk statement. Generic LLMs make up figures. We need answers that cite the exact page, and that say "not found" when the filings don't contain the answer.</p></div>
+    <div class="card"><h4>Data</h4><p><b>FinanceBench</b> (open-source sample): 150 expert-written questions with gold answers <i>and the gold evidence page</i>, over real SEC filings (PDFs). Optional second benchmark: <b>MultiHop-RAG</b> (609 news articles, 2,556 queries).</p></div>
+    <div class="card"><h4>Showcase</h4><p>Naive → hybrid → reranked → query-transformed → corrective → agentic RAG, all scored against the same ground truth, so every technique has to show a measured gain.</p></div>
+    <div class="card"><h4>Runs on</h4><p>A MacBook with Apple Silicon and 16 GB RAM (recommended). Local: <code>bge-small</code> embeddings, <code>bge-reranker</code>, an Ollama 7–8B model, Qdrant. No paid key needed.</p></div>
+    <div class="card"><h4>Cloud switch</h4><p><code>LLM_PROVIDER=anthropic</code> uses Claude for generation, and Claude Haiku as an optional evaluation judge. The keys live in <code>.env</code> and are never committed.</p></div>
+    <div class="card"><h4>Production shape</h4><p>Typed Python package, a config-driven CLI, a FastAPI service, a Streamlit demo UI, Docker Compose, tests, GitHub Actions CI with an eval regression gate, and ADRs.</p></div>
+  </div>
+</section>
+
+<!-- 1 -->
+<section id="experiment">
+  <h2><span class="num">1</span>From experiment to product</h2>
+  <p class="intro">What the tutorial experiment already proves, and what a production system still needs. This table is the "why a second project" answer for the interview.</p>
+  <table>
+    <tr><th>Area</th><th>Experiment (<code>hybrid-retrieval/</code>)</th><th>Product (<code>finsight-rag/</code>)</th></tr>
+    <tr><td>Scope</td><td>Retrieval only: returns doc IDs</td><td>Full RAG: retrieve → rerank → generate an answer with citations → abstain when unsure</td></tr>
+    <tr><td>Documents</td><td>FiQA forum posts (short, so no chunking needed)</td><td>Long PDFs with tables, so chunking and parsing really matter</td></tr>
+    <tr><td>Chunking</td><td>None</td><td>4 strategies (fixed, recursive, page-aware, parent-child), compared on the same eval</td></tr>
+    <tr><td>Vector store</td><td>numpy matrix in memory</td><td>Qdrant (payload filters, persistence, runs in Docker)</td></tr>
+    <tr><td>Embeddings</td><td><code>all-MiniLM-L6-v2</code>, with OpenAI or Gemini as options</td><td><code>BAAI/bge-small-en-v1.5</code> locally on Apple GPU (MPS), cached by content hash</td></tr>
+    <tr><td>Reranker</td><td>Cohere API (free-tier rate limits cap the eval at 50 queries)</td><td>Local cross-encoder <code>bge-reranker-base</code>, so all 150 queries can be scored without a rate limit</td></tr>
+    <tr><td>Code style</td><td>Numbered scripts that do their work at import time, with hard-coded paths</td><td><code>src/</code> package, interfaces and registries, pydantic config, typer CLI</td></tr>
+    <tr><td>Evaluation</td><td>NDCG@10 only</td><td>Retrieval (Recall@k, MRR, NDCG) + generation (correctness, faithfulness, abstention) + latency and cost</td></tr>
+    <tr><td>Ops</td><td>None</td><td>Tests, CI, Docker, structured logs, per-stage timings, ADRs</td></tr>
+  </table>
+</section>
+
+<!-- 2 -->
+<section id="problem">
+  <h2><span class="num">2</span>Problem statement</h2>
+  <div class="callout"><b>Problem.</b> Financial analysts, auditors and investors need fast, trustworthy answers to questions such as
+    <i>"What was 3M's FY2018 capital expenditure?"</i> or <i>"Did Adobe's operating margin improve between FY2015 and FY2017?"</i>.
+    The answers sit in long, table-heavy SEC filings. Keyword search misses paraphrases, and LLMs alone invent numbers. An error in a financial answer costs real money.</div>
+  <div class="grid g2">
+    <div class="card"><h4>Users &amp; jobs-to-be-done</h4><ul>
+      <li>Analysts: look up a metric for a company and year</li>
+      <li>Analysts: compare a metric across years</li>
+      <li>Auditors: find the exact page that supports a claim</li>
+      <li>Everyone: be told plainly when the filings don't answer the question</li></ul></div>
+    <div class="card"><h4>Requirements</h4><ul>
+      <li><b>Grounded:</b> every claim cites <code>[company · doc · page]</code></li>
+      <li><b>Abstains:</b> says "not in the provided filings" rather than guessing</li>
+      <li><b>Filterable:</b> narrows the search by company, year and doc type</li>
+      <li><b>Local-first:</b> runs offline on a laptop, with the cloud LLM optional</li>
+      <li><b>Measurable:</b> every change is scored on a fixed eval set</li></ul></div>
+  </div>
+  <h3>Success metrics (targets to confirm after the Phase 5 baseline)</h3>
+  <table>
+    <tr><th>Metric</th><th>What it measures</th><th>How</th></tr>
+    <tr><td>Page Recall@10</td><td>Did the gold evidence page appear in the top-10 retrieved chunks?</td><td>Compare chunk page metadata with the FinanceBench evidence page</td></tr>
+    <tr><td>MRR / NDCG@10</td><td>How high was the gold page ranked?</td><td>Same ground truth (continues the experiment's metric)</td></tr>
+    <tr><td>Answer correctness</td><td>Does the answer match the gold answer?</td><td>Numeric tolerance match plus an LLM judge for text answers</td></tr>
+    <tr><td>Faithfulness</td><td>Is every claim supported by the cited chunks?</td><td>LLM judge per claim</td></tr>
+    <tr><td>Citation precision</td><td>Do the cited pages actually contain the support?</td><td>Cited page vs. evidence page</td></tr>
+    <tr><td>p50 / p95 latency</td><td>Time spent in each stage</td><td>Per-stage timers in logs</td></tr>
+  </table>
+  <p style="font-size:14px;color:var(--muted)">No target numbers are promised up front. We measure the naive baseline first, then report how much each technique changes the score. That before-and-after table is the strongest interview artifact.</p>
+</section>
+
+<!-- 3 -->
+<section id="data">
+  <h2><span class="num">3</span>Dataset</h2>
+  <h3>Primary: FinanceBench (open-source sample) — recommended</h3>
+  <div class="grid g2">
+    <div class="card"><h4>What it is</h4><ul>
+      <li>150 expert-annotated Q&amp;A pairs about publicly listed companies (Patronus AI, 2023, arXiv 2311.11944)</li>
+      <li>Each row has: question, gold answer, company, document name, and the <b>evidence text and page number</b> (0-based, verified against PyMuPDF)</li><li>Question types: 50 metrics-generated, 50 domain-relevant, 50 novel-generated</li>
+      <li>The source documents are real SEC filings (10-K, 10-Q, 8-K, earnings releases), shipped as PDFs in the GitHub repo</li>
+      <li>Q&amp;A on Hugging Face (<code>PatronusAI/financebench</code>); PDFs on GitHub (<code>patronus-ai/financebench/pdfs</code>)</li></ul></div>
+    <div class="card"><h4>Why it fits this project</h4><ul>
+      <li><b>Continuity:</b> the same finance domain as the FiQA experiment</li>
+      <li><b>Long PDFs with tables:</b> chunking and parsing are real problems here, not toy ones</li>
+      <li><b>Page-level ground truth:</b> lets us score retrieval, not only the final answer</li>
+      <li><b>Laptop-sized:</b> the 150 questions reference <b>84 filings</b> (64 10-K, 8 10-Q, 6 8-K, 6 earnings releases), about <b>165 MB</b> of PDFs out of the repo's 368 files (~705 MB). That is "a bit large" but fits comfortably on a MacBook.</li>
+      <li><b>Realistic question types:</b> metric lookup, multi-year reasoning, and calculations</li></ul></div>
+  </div>
+  <div class="callout warn"><b>License:</b> FinanceBench is CC-BY-NC-4.0 (non-commercial use only). That is fine for a portfolio or learning project. Say so in the README and don't redistribute the PDFs in your repo: the download script fetches them.</div>
+
+  <h3>Secondary (Phase 7): MultiHop-RAG</h3>
+  <p>609 news articles (Sep–Dec 2023, average about 2K tokens) and 2,556 queries of four types: inference, comparison, temporal, and <b>null</b> (unanswerable, 301 of them). Most queries need 2–4 pieces of evidence. It is the right benchmark for showing query decomposition, agentic multi-hop retrieval, and refusal on unanswerable questions. It is small (a few MB) and loads through the same loader interface, which also shows the code works on more than one corpus.</p>
+
+  <h3>Alternatives considered</h3>
+  <table>
+    <tr><th>Dataset</th><th>Verdict</th><th>Reason</th></tr>
+    <tr><td>FiQA (reuse)</td><td>No</td><td>Short posts mean no chunking story, there are no gold answers for generation, and it would duplicate the experiment</td></tr>
+    <tr><td>Natural Questions / HotpotQA (full)</td><td>No</td><td>The Wikipedia-scale corpus is too large to index comfortably on a laptop</td></tr>
+    <tr><td>BEIR SciFact</td><td>No</td><td>Small and clean, but abstracts are short and have no answers</td></tr>
+    <tr><td>Qasper (NLP papers)</td><td>Maybe</td><td>Good long-document QA, but a less relatable domain for business interviews</td></tr>
+    <tr><td><b>FinanceBench + MultiHop-RAG</b></td><td><b>Yes</b></td><td>Long documents, page-level ground truth, answers, unanswerable queries, and laptop-sized</td></tr>
+  </table>
+</section>
+
+<!-- 4 -->
+<section id="topics">
+  <h2><span class="num">4</span>RAG topics covered</h2>
+  <p class="intro">Each topic maps to one module and one row in the results table, so you can point to the code and the number for every concept.</p>
+  <table>
+    <tr><th>#</th><th>Topic</th><th>What you'll build</th><th>Module</th></tr>
+    <tr><td>1</td><td>Document ingestion</td><td>PDF to per-page text, table handling, cleanup, metadata (company, year, doc type, page)</td><td><code>ingestion/</code></td></tr>
+    <tr><td>2</td><td>Chunking strategies</td><td>Fixed-token, recursive, page-aware, parent-child (small-to-big), with chunk-size stats</td><td><code>chunking/</code></td></tr>
+    <tr><td>3</td><td>Embeddings</td><td>Local bi-encoder, batching, MPS device, content-hash cache, query vs. passage instructions</td><td><code>embedding/</code></td></tr>
+    <tr><td>4</td><td>Vector database</td><td>Qdrant collection, payload indexes, metadata filters, idempotent upserts</td><td><code>indexing/</code></td></tr>
+    <tr><td>5</td><td>Sparse retrieval (BM25)</td><td><code>bm25s</code> index over chunks (reusing your experiment knowledge)</td><td><code>retrieval/sparse.py</code></td></tr>
+    <tr><td>6</td><td>Hybrid search + RRF</td><td>Rank fusion of dense and sparse results, with tunable k and candidate depth</td><td><code>retrieval/hybrid.py</code></td></tr>
+    <tr><td>7</td><td>Reranking</td><td>Local cross-encoder, with Cohere as an optional plug-in</td><td><code>retrieval/reranker.py</code></td></tr>
+    <tr><td>8</td><td>Metadata filtering / self-query</td><td>Extract company and fiscal year from the question, then filter in Qdrant</td><td><code>retrieval/filters.py</code></td></tr>
+    <tr><td>9</td><td>Query transformation</td><td>Multi-query, HyDE, and decomposition into sub-questions</td><td><code>retrieval/query_transform.py</code></td></tr>
+    <tr><td>10</td><td>Contextual retrieval</td><td>Prepend a short document and section context to each chunk before embedding</td><td><code>chunking/contextual.py</code></td></tr>
+    <tr><td>11</td><td>Grounded generation</td><td>Prompt templates, numbered context blocks, citation parsing and validation, abstention</td><td><code>generation/</code></td></tr>
+    <tr><td>12</td><td>Corrective RAG (CRAG)</td><td>Grade the retrieved chunks; if they are weak, rewrite the query and retry or abstain</td><td><code>pipelines/corrective.py</code></td></tr>
+    <tr><td>13</td><td>Agentic / multi-hop RAG</td><td>A tool-using loop with search, then read, then answer, run on MultiHop-RAG</td><td><code>pipelines/agentic.py</code></td></tr>
+    <tr><td>14</td><td>Evaluation</td><td>Retrieval metrics, LLM-as-judge, an experiment matrix, a CI regression gate</td><td><code>evaluation/</code></td></tr>
+    <tr><td>15</td><td>Serving &amp; observability</td><td>FastAPI, streaming, per-stage latency and token cost, request IDs</td><td><code>api/</code>, <code>observability/</code></td></tr>
+  </table>
+  <p style="font-size:14px;color:var(--muted)">Deliberately out of scope for v1: GraphRAG, fine-tuning embeddings, multi-tenant auth. Listed as "next steps" in the README, which is also a good interview answer.</p>
+</section>
+
+<!-- 5 -->
+<section id="models">
+  <h2><span class="num">5</span>Models &amp; tech stack (and why)</h2>
+  <table>
+    <tr><th>Role</th><th>Default (local)</th><th>Optional (cloud)</th><th>Why this choice</th></tr>
+    <tr><td>Embeddings</td><td><code>BAAI/bge-small-en-v1.5</code> (384-dim) via sentence-transformers on MPS</td><td>—</td><td>Much stronger retrieval than MiniLM at similar speed. 384 dimensions keep the Qdrant index small. Swap to <code>bge-base</code> (768-dim) as an experiment.</td></tr>
+    <tr><td>Reranker</td><td><code>BAAI/bge-reranker-base</code> cross-encoder</td><td>Cohere Rerank (key already in your <code>.env</code>)</td><td>Local means no rate limit, so all 150 queries can be evaluated. Cohere stays as a comparison row.</td></tr>
+    <tr><td>Generator LLM</td><td>Ollama <code>qwen2.5:7b-instruct</code> (or <code>llama3.1:8b</code>); a 4-bit build is about 5 GB</td><td>Claude <code>claude-opus-5-5</code> via the <code>anthropic</code> SDK</td><td>A 7–8B local model is good enough to show the pipeline. Claude is the quality ceiling. Check the Ollama library for newer models when you start Phase 6.</td></tr>
+    <tr><td>Eval judge</td><td>The same Ollama model (noisier)</td><td>Claude <code>claude-haiku-5-5</code> (cheap)</td><td>A judge model should be stronger than, or different from, the model it grades. Haiku keeps the cost of a 150-question run low.</td></tr>
+    <tr><td>PDF parsing</td><td><code>pymupdf</code> (fast, page-accurate)</td><td>—</td><td>Fast across thousands of pages. Note that it is AGPL-licensed; <code>pypdf</code> (BSD) is the fallback. Record the choice in an ADR.</td></tr>
+    <tr><td>Vector DB</td><td>Qdrant (embedded mode for dev, Docker for the service)</td><td>Qdrant Cloud</td><td>Metadata filters, persistence, a simple API, widely known in interviews. One code path for local and Docker.</td></tr>
+    <tr><td>Sparse index</td><td><code>bm25s</code></td><td>—</td><td>You already know it from the experiment. Fast, and saves to disk.</td></tr>
+    <tr><td>App layer</td><td>FastAPI, typer CLI, pydantic-settings, Streamlit</td><td>—</td><td>Standard Python production stack with typed config.</td></tr>
+    <tr><td>Tooling</td><td><code>uv</code>, ruff, mypy, pytest, pre-commit, Docker, GitHub Actions</td><td>—</td><td>Reproducible environments and fast CI.</td></tr>
+  </table>
+  <div class="callout"><b>Why no LangChain or LlamaIndex?</b> Retrieval, fusion, prompting and evaluation are written by hand, around small interfaces (<code>Retriever</code>, <code>Reranker</code>, <code>LLM</code>, <code>Chunker</code>). That proves you understand each part, and a framework could still be added behind those interfaces later. This is a deliberate choice, recorded as an ADR.</div>
+  <div class="callout warn"><b>Claude API notes for the code:</b> use the official <code>anthropic</code> Python SDK and read <code>ANTHROPIC_API_KEY</code> from the environment. Current Claude models reject the <code>temperature</code>, <code>top_p</code> and <code>top_k</code> parameters, so don't send them. Control depth with <code>output_config={"effort": "low"}</code> for the judge. Check <code>stop_reason</code> (including <code>"refusal"</code>) before reading the answer text.</div>
+</section>
+
+<!-- 6 -->
+<section id="arch">
+  <h2><span class="num">6</span>Architecture</h2>
+  <div class="lane-label">Offline: indexing pipeline (<code>finsight ingest</code> → <code>finsight index</code>)</div>
+  <div class="flow">
+    <div class="step"><b>Download</b><span>FinanceBench JSONL + referenced PDFs</span></div><div class="arrow">→</div>
+    <div class="step"><b>Parse</b><span>PDF → pages, tables, cleanup</span></div><div class="arrow">→</div>
+    <div class="step"><b>Metadata</b><span>company, FY, doc type, page</span></div><div class="arrow">→</div>
+    <div class="step hl"><b>Chunk</b><span>strategy from config</span></div><div class="arrow">→</div>
+    <div class="step"><b>Embed</b><span>bge-small, hash cache</span></div><div class="arrow">→</div>
+    <div class="step"><b>Index</b><span>Qdrant (dense) + bm25s (sparse) + manifest</span></div>
+  </div>
+  <div class="lane-label">Online: query pipeline (<code>POST /query</code>)</div>
+  <div class="flow">
+    <div class="step"><b>Query</b><span>+ optional filters</span></div><div class="arrow">→</div>
+    <div class="step"><b>Transform</b><span>filter extraction, multi-query / HyDE</span></div><div class="arrow">→</div>
+    <div class="step hl"><b>Hybrid retrieve</b><span>dense + BM25 → RRF (top 50)</span></div><div class="arrow">→</div>
+    <div class="step hl"><b>Rerank</b><span>cross-encoder (top 8)</span></div><div class="arrow">→</div>
+    <div class="step"><b>Grade</b><span>CRAG: enough evidence?</span></div><div class="arrow">→</div>
+    <div class="step hl"><b>Generate</b><span>Ollama | Claude, cited</span></div><div class="arrow">→</div>
+    <div class="step"><b>Validate</b><span>citations check, abstain</span></div>
+  </div>
+  <div class="lane-label">Cross-cutting</div>
+  <div class="flow">
+    <div class="step"><b>Config</b><span>YAML + .env → pydantic Settings</span></div><div class="arrow"> </div>
+    <div class="step"><b>Observability</b><span>JSON logs, request ID, per-stage ms, tokens</span></div><div class="arrow"> </div>
+    <div class="step"><b>Evaluation</b><span>same pipeline objects, offline runner</span></div><div class="arrow"> </div>
+    <div class="step"><b>Serving</b><span>FastAPI + Streamlit, Docker Compose</span></div>
+  </div>
+  <h3>Key design principles</h3>
+  <div class="grid g2">
+    <div class="card"><h4>Interfaces + registries</h4><p>Every stage is a small ABC (<code>Chunker</code>, <code>Retriever</code>, <code>Reranker</code>, <code>LLM</code>). Implementations register by name, so a YAML file chooses the pipeline. A new technique is a new class plus one config line.</p></div>
+    <div class="card"><h4>One pipeline, three callers</h4><p>The CLI, the API and the eval runner all build the same <code>RAGPipeline</code> object from config, so the scores you report match what the API actually serves.</p></div>
+    <div class="card"><h4>Idempotent indexing</h4><p>A manifest stores hashes of the corpus, chunker config and embedding model. Re-running skips the work if nothing changed, and rebuilds if anything did.</p></div>
+    <div class="card"><h4>No side effects at import</h4><p>Unlike the numbered experiment scripts, no module loads models or data when imported. Expensive objects are created lazily and cached in a dependency container.</p></div>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="tree">
+  <h2><span class="num">7</span>Folder structure</h2>
+  <p class="intro">Lives at <code>hybrid-retrieval/finsight-rag/</code>, next to the experiment and independent of it. Files marked <code>(gen)</code> are created by commands and are gitignored.</p>
+<pre class="tree"><span class="d">finsight-rag/</span>
+├── README.md                       <span class="c"># pitch, quickstart, results table, demo GIF</span>
+├── CLAUDE.md                       <span class="c"># agent instructions → docs/DEVELOPMENT_GUIDE.md</span>
+├── pyproject.toml                  <span class="c"># package "finsight", deps, ruff/mypy/pytest config, CLI entry point</span>
+├── uv.lock
+├── Makefile                        <span class="c"># make setup | data | index | eval | serve | test | lint</span>
+├── .env.example                    <span class="c"># documented keys, no real values</span>
+├── .gitignore  .pre-commit-config.yaml  .dockerignore
+├── Dockerfile                      <span class="c"># multi-stage, non-root, API image</span>
+├── docker-compose.yml              <span class="c"># api + qdrant (+ ui); Ollama runs on the host</span>
+│
+├── <span class="d">configs/</span>
+│   ├── base.yaml                   <span class="c"># paths, chunker, retriever, reranker, k values</span>
+│   ├── local.yaml                  <span class="c"># Ollama + local models (default)</span>
+│   ├── cloud.yaml                  <span class="c"># Claude generator + Claude judge</span>
+│   └── <span class="d">experiments/</span>                <span class="c"># chunking_sweep.yaml, retrieval_ablation.yaml, advanced.yaml</span>
+│
+├── <span class="d">src/finsight/</span>
+│   ├── __init__.py
+│   ├── cli.py                      <span class="c"># typer: download | ingest | index | query | eval | serve</span>
+│   ├── config.py                   <span class="c"># pydantic-settings: YAML + env overrides</span>
+│   ├── schemas.py                  <span class="c"># Page, Chunk, RetrievedChunk, Citation, Answer, EvalRecord</span>
+│   ├── container.py                <span class="c"># builds and caches pipeline objects from config</span>
+│   ├── <span class="d">data/</span>                       <span class="c"># download.py, financebench.py, multihop.py (loaders → schemas)</span>
+│   ├── <span class="d">ingestion/</span>                  <span class="c"># pdf_parser.py, cleaner.py, tables.py, metadata.py</span>
+│   ├── <span class="d">chunking/</span>                   <span class="c"># base.py, fixed.py, recursive.py, page_aware.py, parent_child.py, contextual.py, registry.py</span>
+│   ├── <span class="d">embedding/</span>                  <span class="c"># base.py, sentence_transformer.py, cache.py</span>
+│   ├── <span class="d">indexing/</span>                   <span class="c"># qdrant_store.py, bm25_store.py, manifest.py, pipeline.py</span>
+│   ├── <span class="d">retrieval/</span>                  <span class="c"># base.py, dense.py, sparse.py, hybrid.py (RRF), filters.py, reranker.py, query_transform.py</span>
+│   ├── <span class="d">generation/</span>
+│   │   ├── <span class="d">llm/</span>                    <span class="c"># base.py, ollama.py, anthropic.py, factory.py</span>
+│   │   ├── <span class="d">prompts/</span>                <span class="c"># answer.md, grade.md, rewrite.md, hyde.md, judge_*.md</span>
+│   │   ├── generator.py            <span class="c"># context assembly, token budget</span>
+│   │   └── citations.py            <span class="c"># parse [n] markers → Citation, validate, abstain</span>
+│   ├── <span class="d">pipelines/</span>                  <span class="c"># base.py (RAGPipeline), naive.py, hybrid_rerank.py, corrective.py, agentic.py, registry.py</span>
+│   ├── <span class="d">evaluation/</span>                 <span class="c"># retrieval_metrics.py, generation_metrics.py, judge.py, runner.py, report.py</span>
+│   ├── <span class="d">api/</span>                        <span class="c"># main.py, routes.py, models.py (request/response), deps.py</span>
+│   └── <span class="d">observability/</span>              <span class="c"># logging.py (JSON), timing.py (stage timers), cost.py</span>
+│
+├── <span class="d">scripts/</span>                        <span class="c"># hand-run learning steps, one or more per phase:</span>
+│   <span class="c">#   00_check_env · 01_download_data · 02_explore_data · 03_parse_pdfs · 04_chunk</span>
+│   <span class="c">#   05_embed_and_index · 06_retrieve · 07_eval_retrieval · 08_generate · 09_advanced_rag</span>
+│   <span class="c">#   10_eval_end_to_end · 10b_label_judge_sample · 11_smoke_api · 12_load_test</span>
+├── <span class="d">ui/</span>streamlit_app.py            <span class="c"># question → answer, citations, per-stage chunks and scores</span>
+├── <span class="d">notebooks/</span>                      <span class="c"># 01_explore_financebench, 02_chunking_analysis, 03_results (read-only analysis)</span>
+├── <span class="d">tests/</span>
+│   ├── <span class="d">unit/</span>                       <span class="c"># test_chunkers, test_rrf, test_metrics, test_citations, test_filters</span>
+│   ├── <span class="d">integration/</span>                <span class="c"># test_index_and_query (tiny fixture), test_api</span>
+│   └── <span class="d">fixtures/</span>                   <span class="c"># 2–3 tiny PDFs/texts + 5 Q&amp;A rows for fast CI</span>
+├── <span class="d">results/</span>                        <span class="c"># committed eval reports: YYYY-MM-DD_&lt;experiment&gt;.md + .json</span>
+├── <span class="d">docs/</span>
+│   ├── PROJECT_SPEC.html           <span class="c"># this document (what &amp; why)</span>
+│   ├── DEVELOPMENT_GUIDE.md        <span class="c"># how to build it, phase by phase (for you and the agent)</span>
+│   ├── INTERVIEW_GUIDE.md          <span class="c"># concepts, most-asked questions, what to study</span>
+│   ├── architecture.md  data_card.md  evaluation.md  runbook.md   <span class="c"># written during the phases</span>
+│   └── <span class="d">adr/</span>                        <span class="c"># 0001-vector-store, 0002-no-framework, 0003-chunking, 0004-llm-providers</span>
+├── <span class="d">data/</span>  (gen)                    <span class="c"># raw/financebench/, raw/pdfs/, processed/pages.parquet, chunks/&lt;strategy&gt;.parquet</span>
+└── <span class="d">indexes/</span>  (gen)                 <span class="c"># qdrant/, bm25/&lt;strategy&gt;/, embed_cache/, manifest.json</span>
+</pre>
+  <div class="callout warn"><b>GitHub Actions gotcha:</b> GitHub only reads workflows from <code>.github/workflows/</code> at the <b>repository root</b>. Because <code>finsight-rag/</code> is a subfolder, put <code>ci.yml</code> at <code>hybrid-retrieval/.github/workflows/finsight-ci.yml</code> with <code>working-directory: finsight-rag</code> and a <code>paths: ["finsight-rag/**"]</code> filter. Alternatively, move the project into its own repo later.</div>
+</section>
+
+<!-- 8 -->
+<section id="config">
+  <h2><span class="num">8</span>Config &amp; keys</h2>
+  <div class="grid g2">
+<pre><span class="c"># .env.example  (copy to .env, never commit .env)</span>
+APP_ENV=local                 <span class="c"># local | docker | ci</span>
+FINSIGHT_CONFIG=configs/local.yaml
+
+<span class="c"># --- LLM provider ---</span>
+LLM_PROVIDER=ollama           <span class="c"># ollama | anthropic</span>
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:7b-instruct
+
+ANTHROPIC_API_KEY=            <span class="c"># only needed when provider=anthropic</span>
+ANTHROPIC_MODEL=claude-opus-5-5
+JUDGE_PROVIDER=anthropic      <span class="c"># or ollama</span>
+JUDGE_MODEL=claude-haiku-5-5
+
+<span class="c"># --- optional ---</span>
+COHERE_API_KEY=               <span class="c"># only for the cohere reranker row</span>
+QDRANT_URL=                   <span class="c"># empty = embedded mode at indexes/qdrant</span>
+LOG_LEVEL=INFO</pre>
+<pre><span class="c"># configs/base.yaml  (shape, not final)</span>
+dataset: financebench
+chunking:
+  strategy: page_aware        <span class="c"># fixed | recursive | page_aware | parent_child</span>
+  chunk_tokens: 512
+  overlap_tokens: 64
+  contextual_headers: false
+embedding:
+  model: BAAI/bge-small-en-v1.5
+  device: mps                 <span class="c"># mps | cpu</span>
+  batch_size: 64
+retrieval:
+  mode: hybrid                <span class="c"># dense | sparse | hybrid</span>
+  candidate_k: 50
+  rrf_k: 60
+  use_metadata_filter: true
+  query_transform: none       <span class="c"># none | multi_query | hyde | decompose</span>
+rerank:
+  provider: local             <span class="c"># none | local | cohere</span>
+  model: BAAI/bge-reranker-base
+  top_n: 8
+pipeline: hybrid_rerank       <span class="c"># naive | hybrid_rerank | corrective | agentic</span>
+generation:
+  max_context_tokens: 6000
+  abstain_phrase: "Not found in the provided filings."</pre>
+  </div>
+  <p style="font-size:14px;color:var(--muted)">Precedence: CLI flag &gt; environment variable &gt; experiment YAML &gt; <code>base.yaml</code>. Every eval report stores the fully resolved config and its hash, so any number can be reproduced.</p>
+</section>
+
+<!-- 9 -->
+<section id="roadmap">
+  <h2><span class="num">9</span>Roadmap: step by step</h2>
+  <p class="intro">Twelve phases. Each one ends with something runnable, a commit or PR, and a "done when" check. Click a phase to expand it. Time estimates assume evenings and weekends.</p>
+
+  <details class="phase" open><summary><span class="ph">P0</span><span class="t">Scaffold &amp; engineering foundation</span><span class="d">~1 day</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>uv init</code>, <code>src/finsight</code> layout, <code>pyproject.toml</code> with ruff, mypy and pytest config, and a <code>finsight</code> CLI entry point</li>
+      <li><code>config.py</code> (pydantic-settings loading YAML + env), <code>observability/logging.py</code> (JSON logs), <code>schemas.py</code></li>
+      <li>Makefile, pre-commit, <code>.env.example</code>, <code>.gitignore</code> for data, indexes and .env</li>
+      <li>CI workflow skeleton: lint, type-check, unit tests</li></ul>
+    <h5>Done when</h5><ul><li><code>make lint test</code> passes locally and in CI; <code>finsight --help</code> works</li></ul>
+    <h5>You learn / can explain</h5><ul><li>src layout, typed config, why no work happens at import, and dependency injection</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P1</span><span class="t">Data acquisition &amp; exploration</span><span class="d">~1 day</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>data/download.py</code>: fetch the FinanceBench JSONL from Hugging Face, then fetch only the PDFs it references from GitHub. Skip files already downloaded, check them, and print the counts.</li>
+      <li><code>data/financebench.py</code>: load rows into <code>EvalRecord</code> (question, answer, doc, evidence page)</li>
+      <li><code>notebooks/01_explore_financebench.ipynb</code>: question types, companies, pages per document, evidence page positions</li>
+      <li><code>docs/data_card.md</code>: source, license, size, known issues</li></ul>
+    <h5>Done when</h5><ul><li><code>finsight download</code> is repeatable, and the data card states the real document, page and question counts</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P2</span><span class="t">Ingestion: PDF → clean pages + metadata</span><span class="d">~2 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>pdf_parser.py</code>: per-page text with 1-indexed page numbers that match the FinanceBench evidence pages</li>
+      <li><code>cleaner.py</code>: strip repeated headers and footers, fix hyphenation, normalize whitespace</li>
+      <li><code>tables.py</code>: keep table rows intact (pipe-separated text) so numbers stay next to their labels</li>
+      <li><code>metadata.py</code>: company, doc type and fiscal year parsed from the document name (e.g. <code>3M_2018_10K</code>)</li>
+      <li>Output: <code>processed/pages.parquet</code></li></ul>
+    <h5>Done when</h5><ul><li>For a sample of 20 questions, the gold evidence text is found on the parsed page with that page number (an automated test)</li></ul>
+    <h5>Interview point</h5><ul><li>"Garbage in, garbage out": parsing quality caps how good retrieval can ever be, and this test proves our parsing is correct</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P3</span><span class="t">Chunking strategies</span><span class="d">~2 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>Chunker</code> ABC plus a registry; implementations: <code>fixed</code> (token windows with overlap), <code>recursive</code> (paragraph → sentence → token), <code>page_aware</code> (never crosses a page boundary, so citations are clean), <code>parent_child</code> (small chunks for search, the parent section for the LLM)</li>
+      <li>Every chunk carries <code>doc_id, company, fy, doc_type, page_start, page_end, chunk_id, parent_id</code></li>
+      <li><code>notebooks/02_chunking_analysis.ipynb</code>: token-length histograms and chunk count per strategy</li></ul>
+    <h5>Done when</h5><ul><li>Unit tests cover the overlap, page-boundary and parent-link invariants; <code>finsight ingest --chunker X</code> writes <code>chunks/X.parquet</code></li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P4</span><span class="t">Embedding &amp; indexing</span><span class="d">~2 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li>Embedder on MPS with batching; cache keyed by <code>sha256(model + text)</code>, so re-chunking only embeds new text</li>
+      <li><code>qdrant_store.py</code>: one collection per (chunker, model); payload indexes on company and fiscal year; batched upserts</li>
+      <li><code>bm25_store.py</code>: a bm25s index per chunker, with chunk IDs kept in the same order</li>
+      <li><code>manifest.py</code>: hashes of corpus, config and model, to skip or rebuild</li></ul>
+    <h5>Done when</h5><ul><li><code>finsight index</code> finishes on the full corpus on your Mac; the timing and index size are written to the README</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P5</span><span class="t">Retrieval + retrieval evaluation (baseline)</span><span class="d">~3 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>DenseRetriever</code>, <code>SparseRetriever</code>, <code>HybridRetriever</code> (RRF), <code>filters.py</code> (rule-based company and year extraction first), <code>LocalReranker</code>, with Cohere as an optional reranker</li>
+      <li><code>retrieval_metrics.py</code>: page Recall@k, MRR, NDCG@10. A hit means a retrieved chunk overlaps the gold page.</li>
+      <li><code>finsight eval --stage retrieval --config experiments/retrieval_ablation.yaml</code> writes <code>results/*.md</code></li></ul>
+    <h5>Done when</h5><ul><li>The first results table exists: {dense, BM25, hybrid, hybrid+filter, hybrid+rerank} × {4 chunkers}, scored on all 150 queries</li></ul>
+    <h5>Interview point</h5><ul><li>Show the ablation table: which stage helps on which question type, and the cost in latency</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P6</span><span class="t">Grounded generation (local + Claude)</span><span class="d">~3 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>LLM</code> ABC with <code>generate()</code> and <code>stream()</code>; <code>OllamaLLM</code> over its HTTP API; <code>AnthropicLLM</code> via the official SDK (retries, refusal handling, token usage logged)</li>
+      <li><code>prompts/answer.md</code>: numbered context blocks <code>[1] (3M · 10-K 2018 · p.45)</code>. Rules: answer only from the context, cite as <code>[n]</code>, show calculations, otherwise give the abstain phrase.</li>
+      <li><code>citations.py</code>: parse the citations, drop any that point to context not provided, and mark the answer "unsupported" if it cites nothing</li>
+      <li><code>NaivePipeline</code> and <code>HybridRerankPipeline</code> built from config</li></ul>
+    <h5>Done when</h5><ul><li><code>finsight query "What was 3M's FY2018 capex?"</code> returns an answer with page citations, on both providers, with a one-flag switch</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P7</span><span class="t">Advanced RAG techniques</span><span class="d">~4–5 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><b>Query transforms:</b> multi-query (3 paraphrases fused with RRF), HyDE (embed a hypothetical answer), decomposition (sub-questions for multi-year comparisons)</li>
+      <li><b>Contextual chunk headers:</b> prepend "Company · FY · doc · section" to each chunk before embedding. The cheap version needs no LLM; the full version uses a local LLM to write a one-line summary per chunk.</li>
+      <li><b>CorrectiveRAG:</b> an LLM or reranker-score check decides whether the evidence is enough. If not, rewrite the query and retry once, then abstain.</li>
+      <li><b>AgenticRAG:</b> a tool loop (<code>search(query, filters)</code>, <code>read_chunk(id)</code>, <code>answer()</code>) with a step limit, evaluated on MultiHop-RAG including the null queries</li>
+      <li>Add a <code>multihop.py</code> loader; the same eval runner works for both datasets</li></ul>
+    <h5>Done when</h5><ul><li><code>results/advanced.md</code> compares each technique with the P5/P6 baseline and shows the latency and LLM-call cost of each</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P8</span><span class="t">End-to-end evaluation harness</span><span class="d">~3 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li><code>generation_metrics.py</code>: numeric match (parse numbers, compare within a relative tolerance), exact or contained match, abstention accuracy</li>
+      <li><code>judge.py</code>: LLM-as-judge for correctness and faithfulness against a fixed rubric, with JSON output validated by pydantic. Cache judge results on disk so re-runs are free.</li>
+      <li><code>runner.py</code>: run an experiment matrix from YAML, save one JSON line per question (inputs, retrieved IDs, answer, scores, timings, tokens)</li>
+      <li><code>report.py</code>: Markdown tables, a per-question-type breakdown, a failure gallery (the 10 worst cases with their retrieved chunks)</li>
+      <li><b>CI regression gate:</b> a 10-question fixture with retrieval only (no LLM) runs in CI and fails if Recall@10 drops below a stored threshold</li></ul>
+    <h5>Done when</h5><ul><li><code>make eval</code> produces a full report; judge agreement is spot-checked by hand on 20 answers, and the result is written down</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P9</span><span class="t">Serving: API + demo UI</span><span class="d">~2 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li>FastAPI: <code>GET /health</code>, <code>GET /ready</code> (indexes loaded), <code>POST /query</code> (pipeline name, filters, top_k), <code>POST /query/stream</code> (Server-Sent Events)</li>
+      <li>The response includes the answer, citations with snippet and page, per-stage timings, token usage and the request ID</li>
+      <li>Streamlit UI: question box, provider and pipeline dropdowns, answer with clickable citations, and an expandable "under the hood" panel (BM25 vs. dense vs. fused vs. reranked lists with scores). This panel is what you'll show interviewers.</li></ul>
+    <h5>Done when</h5><ul><li>The API integration tests pass, and a 60-second demo GIF is in the README</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P10</span><span class="t">Production hardening &amp; deployment</span><span class="d">~2–3 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li>Multi-stage Dockerfile (uv, non-root user, models pre-downloaded into the image or a mounted volume); docker-compose runs api, qdrant and ui, with Ollama reached at <code>host.docker.internal</code></li>
+      <li>Timeouts, retries and fallbacks: if Claude fails, fall back to Ollama; if the reranker fails, use the RRF order</li>
+      <li>Caching: query-embedding LRU cache and a cache for answers to identical questions</li>
+      <li>Security: secrets only from the environment, input length limits, treat retrieved text as data (a prompt-injection note in the system prompt), basic rate limiting</li>
+      <li><code>docs/runbook.md</code>: how to rebuild indexes, rotate keys and debug a bad answer</li></ul>
+    <h5>Done when</h5><ul><li><code>docker compose up</code> on a fresh clone (plus <code>make data index</code>) serves answers</li></ul>
+  </div></details>
+
+  <details class="phase"><summary><span class="ph">P11</span><span class="t">Documentation &amp; showcase</span><span class="d">~2 days</span></summary><div class="body">
+    <h5>Build</h5><ul>
+      <li>README: problem → architecture diagram → quickstart in 5 commands → results table → design decisions → limitations → next steps</li>
+      <li><code>docs/architecture.md</code>, <code>evaluation.md</code>, ADRs 0001–0004, <code>interview_guide.md</code></li>
+      <li>Module docstrings that explain the <i>why</i>, in the same teaching style as the experiment files</li>
+      <li>A link from the parent repo README: "experiment/ → product/"</li></ul>
+    <h5>Done when</h5><ul><li>A stranger can clone the repo, run it, and understand the results table without asking you anything</li></ul>
+  </div></details>
+
+  <div class="callout ok"><b>Total:</b> about 4–6 weeks part-time. P0–P6 alone is already a complete, demoable RAG system. P7–P11 is what makes it stand out.</div>
+</section>
+
+<!-- 10 -->
+<section id="eval">
+  <h2><span class="num">10</span>Evaluation plan</h2>
+  <div class="grid g2">
+    <div class="card"><h4>Experiment matrix (one variable at a time)</h4><ul>
+      <li><b>E1 Chunking:</b> 4 strategies × 2 sizes (256 / 512 tokens), with hybrid retrieval held fixed</li>
+      <li><b>E2 Retrieval:</b> dense, BM25, hybrid, + metadata filter, + reranker</li>
+      <li><b>E3 Query transforms:</b> none, multi-query, HyDE, decomposition</li>
+      <li><b>E4 Generator:</b> Ollama 7B vs. Claude on the best retrieval setup</li>
+      <li><b>E5 Pipelines:</b> naive vs. hybrid_rerank vs. corrective vs. agentic</li>
+      <li><b>E6 Generalization:</b> best pipeline on MultiHop-RAG, including null queries</li></ul></div>
+    <div class="card"><h4>Rigor</h4><ul>
+      <li>Fixed seeds; the resolved config and its hash are stored with every result</li>
+      <li>Results broken down by question type, not only the overall average</li>
+      <li>Judge validated against 20 hand labels; disagreements written up</li>
+      <li>Retrieval metrics are free (no LLM), so run them often; judge runs are cached</li>
+      <li>Report the cost of each gain: added latency and extra LLM calls</li></ul></div>
+  </div>
+<pre><span class="c"># Example results table shape (filled in by report.py; the numbers come from your own runs)</span>
+| Pipeline              | Chunker     | Recall@10 | MRR  | Correct | Faithful | Abstain acc | p50 ms |
+|-----------------------|-------------|-----------|------|---------|----------|-------------|--------|
+| naive (dense)         | fixed-512   |    …      |  …   |   …     |    …     |     …       |   …    |
+| hybrid + rerank       | page_aware  |    …      |  …   |   …     |    …     |     …       |   …    |
+| + multi-query         | page_aware  |    …      |  …   |   …     |    …     |     …       |   …    |
+| corrective            | parent_child|    …      |  …   |   …     |    …     |     …       |   …    |</pre>
+</section>
+
+<!-- 11 -->
+<section id="prod">
+  <h2><span class="num">11</span>Production readiness checklist</h2>
+  <div class="grid g3">
+    <div class="card"><h4>Code quality</h4><ul><li>Type hints everywhere, mypy run in CI</li><li>ruff lint and format</li><li>Unit and integration tests, with coverage reported</li><li>No side effects at import</li></ul></div>
+    <div class="card"><h4>Reproducibility</h4><ul><li><code>uv.lock</code> pins dependencies</li><li>Config hash in every result</li><li>Index manifest</li><li>Data downloaded by script, never committed</li></ul></div>
+    <div class="card"><h4>Reliability</h4><ul><li>Timeouts and retries on every external call</li><li>LLM and reranker fallbacks</li><li>Health and readiness endpoints</li><li>Graceful abstain</li></ul></div>
+    <div class="card"><h4>Observability</h4><ul><li>JSON logs with a request ID</li><li>Per-stage latency</li><li>Token and cost tracking per request</li><li>Retrieved IDs logged for debugging</li></ul></div>
+    <div class="card"><h4>Security</h4><ul><li>Secrets only from the environment; <code>.env</code> gitignored</li><li>Prompt-injection guard in the system prompt</li><li>Input size limits</li><li>Non-root container</li></ul></div>
+    <div class="card"><h4>Documentation</h4><ul><li>README quickstart</li><li>Architecture doc and ADRs</li><li>Data card and license</li><li>Runbook and interview guide</li></ul></div>
+  </div>
+</section>
+
+<!-- 12 -->
+<section id="git">
+  <h2><span class="num">12</span>Git &amp; CI workflow</h2>
+  <ul>
+    <li><b>Branch per phase:</b> <code>feat/p2-ingestion</code> → PR into <code>main</code> → CI must pass → squash merge. Small PRs with clear descriptions read well on GitHub.</li>
+    <li><b>Conventional commits:</b> <code>feat(chunking): add parent-child chunker</code>, <code>test(retrieval): RRF tie handling</code>, <code>docs(adr): vector store choice</code></li>
+    <li><b>Automation on every push:</b> GitHub Actions runs ruff, mypy, unit tests, integration tests on the fixture corpus, and the retrieval regression gate. Pushing is how the project "deploys" its quality checks.</li>
+    <li><b>Release tags:</b> <code>v0.1</code> (P6, basic RAG), <code>v0.2</code> (P8, full eval), <code>v1.0</code> (P11, showcase). Each tag links to its results report.</li>
+    <li><b>Never committed:</b> <code>.env</code>, <code>data/</code>, <code>indexes/</code>, model weights</li>
+  </ul>
+</section>
+
+<!-- 13 -->
+<section id="interview">
+  <h2><span class="num">13</span>Interview narrative</h2>
+  <div class="callout"><b>30-second pitch:</b> "I first rebuilt hybrid retrieval on FiQA to understand BM25, dense retrieval, RRF and reranking in isolation. Then I built FinSight RAG, a production-style system over real SEC filings. It parses long PDFs, compares four chunking strategies, runs hybrid retrieval with metadata filters and a local reranker, and generates cited answers with a local LLM or Claude. It also abstains when the evidence isn't there. Every technique is measured on FinanceBench against page-level ground truth, and CI blocks retrieval regressions."</div>
+  <table>
+    <tr><th>Likely question</th><th>Where your answer lives</th></tr>
+    <tr><td>Why hybrid rather than dense only?</td><td>The E2 table: BM25 wins on exact tickers, line-item names and years; dense wins on paraphrase; RRF combines ranks without needing to calibrate scores</td></tr>
+    <tr><td>How did you choose chunk size and strategy?</td><td>The E1 table and ADR-0003; page_aware chunks give clean citations</td></tr>
+    <tr><td>How do you know it works?</td><td>The P8 harness: retrieval and generation metrics, a hand-validated judge, the failure gallery</td></tr>
+    <tr><td>How do you prevent hallucination?</td><td>Grounding prompt, citation validation, CRAG grading, abstention accuracy metric</td></tr>
+    <tr><td>Latency vs. quality trade-off?</td><td>Per-stage timings; the reranker's cost vs. its gain; when to skip query transforms</td></tr>
+    <tr><td>How would you scale to 1M documents?</td><td>Qdrant sharding and HNSW tuning, async ingestion workers, embedding batch jobs, a cache layer, approximate filters</td></tr>
+    <tr><td>Why not LangChain?</td><td>ADR-0002: transparency and testability; the interfaces would let you add it later</td></tr>
+  </table>
+</section>
+
+<!-- 14 -->
+<section id="risks">
+  <h2><span class="num">14</span>Risks &amp; mitigations</h2>
+  <table>
+    <tr><th>Risk</th><th>Mitigation</th></tr>
+    <tr><td>PDF tables parse badly, so numbers get separated from their labels</td><td>P2 evidence-page test; table-aware extraction; record known failures in the data card</td></tr>
+    <tr><td>Indexing is slow or runs out of memory on the Mac</td><td>bge-small, batching, embedding cache, index one chunker at a time; <code>--limit-docs</code> flag for quick dev runs</td></tr>
+    <tr><td>A 7B local model is weak at arithmetic</td><td>Prompt it to show the calculation; compare with Claude in E4; report the gap honestly</td></tr>
+    <tr><td>150 questions is a small eval set (noisy averages)</td><td>Break results down by type, report the number of questions per row, add MultiHop-RAG for scale</td></tr>
+    <tr><td>Cloud API cost or rate limits</td><td>Local by default, judge cache, Haiku as judge, retrieval-only metrics in CI</td></tr>
+    <tr><td>License (CC-BY-NC; PyMuPDF is AGPL)</td><td>Non-commercial portfolio use; PDFs not redistributed; licenses noted in an ADR and the README</td></tr>
+  </table>
+</section>
+
+<!-- 15 -->
+<section id="open">
+  <h2><span class="num">15</span>Open decisions for you to fine-tune</h2>
+  <table>
+    <tr><th>Decision</th><th>Recommendation</th><th>Alternative</th></tr>
+    <tr><td>Primary dataset</td><td>FinanceBench (+ MultiHop-RAG in P7)</td><td>MultiHop-RAG only (simpler, no PDF parsing)</td></tr>
+    <tr><td>Project name</td><td><code>finsight-rag</code></td><td>Any name; change the folder and package before P0</td></tr>
+    <tr><td>Mac RAM</td><td><b>Decided:</b> 16 GB M5, so <code>qwen2.5:7b-instruct</code> + Qdrant + the app</td><td>Use <code>qwen2.5:3b-instruct</code> if memory is tight</td></tr>
+    <tr><td>Vector DB</td><td>Qdrant</td><td>LanceDB or Chroma (embedded only, simpler)</td></tr>
+    <tr><td>UI</td><td>Streamlit</td><td>Gradio, or API + Swagger only</td></tr>
+    <tr><td>Repo layout</td><td>Subfolder in this repo; CI at the repo root</td><td>Separate GitHub repo for a cleaner portfolio link</td></tr>
+    <tr><td>Env/deps</td><td><code>uv</code></td><td>pip + venv (as in the experiment)</td></tr>
+  </table>
+</section>
+
+<footer>
+  FinSight RAG · Project spec v0.1 (draft) · Created 2026-11-23 · Sources: FinanceBench (Islam et al., 2023, arXiv 2311.11944; huggingface.co/datasets/PatronusAI/financebench; github.com/patronus-ai/financebench) ·
+  MultiHop-RAG (Tang &amp; Yang, 2024, arXiv 2401.15391; github.com/yixuantt/MultiHop-RAG).
+</footer>
+</main>
+</div>
+</body>
+</html>
