@@ -11,14 +11,14 @@ WHY
   until something asks for it, and it is created only once per container.
 
 GROWTH PLAN
-  P3: tokenizer, chunker · P4: embedder, qdrant, bm25 · P5: retrievers, reranker (done) ·
-  P6: llm, pipeline · P8: judge.
+  P3: tokenizer, chunker · P4: embedder, qdrant, bm25 · P5: retrievers, reranker ·
+  P6: llm, pipeline (done) · P8: judge.
 """
 
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from finsight.config import Settings
 from finsight.observability.logging import get_logger
@@ -29,8 +29,10 @@ if TYPE_CHECKING:
     from finsight.chunking.base import Chunker
     from finsight.chunking.tokenizer import Tokenizer
     from finsight.embedding.base import Embedder
+    from finsight.generation.llm.base import LLM
     from finsight.indexing.bm25_store import BM25Index
     from finsight.indexing.qdrant_store import QdrantStore
+    from finsight.pipelines.base import RAGPipeline
     from finsight.retrieval.base import ChunkStore, Reranker, Retriever
     from finsight.retrieval.filters import FilterExtractor
     from finsight.retrieval.service import RetrievalService
@@ -144,6 +146,48 @@ class Container:
             extractor=self.filter_extractor,
         )
 
+    @cached_property
+    def llm(self) -> LLM:
+        """The generator (P6): llm.preset, "auto" resolved to what can run right now."""
+        from finsight.generation.llm.factory import build_llm
+        from finsight.indexing.pipeline import usage_dir
+
+        s = self.settings
+        return build_llm(
+            s.llm, root=s.root, secrets=s.secrets, usage_dir=usage_dir(s), device=s.embedding.device
+        )
+
+    @cached_property
+    def judge_llm(self) -> LLM:
+        """The judge (P8): judge.preset, resolved like llm."""
+        from finsight.generation.llm.factory import build_llm
+        from finsight.indexing.pipeline import usage_dir
+
+        s = self.settings
+        return build_llm(
+            s.judge,
+            root=s.root,
+            secrets=s.secrets,
+            usage_dir=usage_dir(s),
+            device=s.embedding.device,
+        )
+
+    @cached_property
+    def pipeline(self) -> RAGPipeline:
+        """The configured RAG pipeline (P6/P7), built from the shared components."""
+        from finsight.pipelines.registry import PIPELINES, load_all
+
+        load_all()
+        name = self.settings.pipeline
+        common: dict[str, Any] = {
+            "llm": self.llm,
+            "tokenizer": self.tokenizer,
+            "store": self.chunk_store,
+        }
+        if name == "naive":
+            return PIPELINES[name](self.settings, dense=self.dense_retriever, **common)  # type: ignore[call-arg]
+        return PIPELINES[name](self.settings, retrieval=self.retrieval, **common)  # type: ignore[call-arg]
+
     def close(self) -> None:
         """Release the Qdrant folder lock (embedded mode)."""
         if "qdrant_client" in self.__dict__:
@@ -170,9 +214,5 @@ class Container:
             if s.rerank.provider != "none"
             else "none",
             "pipeline": s.pipeline,
-            "llm": f"{s.llm.provider}:{_llm_model(s)}",
+            "llm": f"{s.llm.preset} ({s.llm.provider}:{s.llm.model})",
         }
-
-
-def _llm_model(s: Settings) -> str:
-    return s.llm.ollama_model if s.llm.provider == "ollama" else s.llm.anthropic_model

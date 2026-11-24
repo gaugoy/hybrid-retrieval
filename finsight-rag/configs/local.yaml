@@ -2,10 +2,10 @@
 # Merged on top of base.yaml.
 
 llm:
-  provider: ollama
+  preset: auto      # Ollama if running, else any LLM you have a free key for, else the local HF model
 
 judge:
-  provider: ollama
+  preset: auto
 
 rerank:
   provider: none    # P5: no gain on FinanceBench; set local / cohere / jina / voyage to compare

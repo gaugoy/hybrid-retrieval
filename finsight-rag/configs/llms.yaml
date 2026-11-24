@@ -1,0 +1,65 @@
+# LLM presets for generation (llm.preset) and judging (judge.preset). Pick one with  LLM=<name>
+# (or JUDGE=<name>) in .env, or --llm <name>. List them with key status:  uv run finsight llms
+#
+# "auto" (the default) picks the first that can run right now, in llm.auto_order:
+#   a running Ollama with the model pulled -> Claude (ANTHROPIC_API_KEY) -> Gemini free tier
+#   (GEMINI_API_KEY) -> Mistral free tier -> Groq free tier -> the local Hugging Face model
+#   (always available after a one-time ~3 GB download; slow and small, but offline and free).
+#
+# Free-tier limits change often and differ per account: the rate_limit values are CONSERVATIVE
+# defaults (2026-11-24). OpenAI is paid-only and refused unless llm.allow_paid: true.
+
+auto:
+  provider: auto
+  model: auto
+
+# ------------------------------------------------------------------ local
+ollama-qwen7b:
+  provider: ollama
+  model: qwen2.5:7b-instruct
+  num_ctx: 8192            # Ollama's default context is small and SILENTLY truncates RAG prompts
+  notes: "Local Ollama server (ollama pull qwen2.5:7b-instruct). Free, offline, uses the Mac GPU."
+
+hf-qwen1.5b:
+  provider: hf
+  model: Qwen/Qwen2.5-1.5B-Instruct
+  num_ctx: 8192
+  notes: "Runs inside Python via transformers (MPS). Free, offline, no server; small model: weaker answers."
+
+# ------------------------------------------------------------------ Claude (paid API; the cloud profile)
+claude-opus:
+  provider: anthropic
+  model: claude-opus-5-5
+  effort: medium
+  notes: "Best answers. ANTHROPIC_API_KEY. Server-side refusal fallback enabled."
+
+claude-haiku:
+  provider: anthropic
+  model: claude-haiku-5-5
+  effort: low
+  notes: "Cheap and fast; the default judge in configs/cloud.yaml."
+
+# ------------------------------------------------------------------ online, free tiers
+gemini-flash:
+  provider: gemini
+  model: gemini-flash-latest          # alias that follows Google's current Flash model
+  rate_limit: {rpm: 8, rpd: 200}
+  notes: "Free tier (GEMINI_API_KEY). Low daily caps: use --limit for evals."
+
+mistral-small:
+  provider: mistral
+  model: mistral-small-latest
+  rate_limit: {rpm: 50, tpm: 400000}
+  notes: "Free 'Experiment' plan (MISTRAL_API_KEY), ~1 req/s. Requests may be used for training."
+
+groq-llama:
+  provider: groq
+  model: llama-3.3-70b-versatile      # check https://console.groq.com/docs/models: Groq rotates models
+  rate_limit: {rpm: 25, tpm: 10000, rpd: 900}
+  notes: "Free tier (GROQ_API_KEY), very fast; tight tokens/minute limit for 6k-token RAG prompts."
+
+# ------------------------------------------------------------------ PAID ONLY (blocked unless allow_paid)
+openai-mini:
+  provider: openai
+  model: gpt-4.1-mini
+  notes: "Paid only (no free tier). Needs llm.allow_paid: true and OPENAI_API_KEY."

@@ -72,20 +72,16 @@ generation:
   max_answer_tokens: 1024
   abstain_phrase: "Not found in the provided filings."
 
-llm:
-  provider: ollama              # ollama | anthropic
+llm:                            # P6: the model comes from a PRESET in configs/llms.yaml (list: uv run finsight llms)
+  preset: auto                  # auto = Ollama if running, else Claude/Gemini/Mistral/Groq if a key is set, else local HF
   ollama_base_url: http://localhost:11434
-  ollama_model: qwen2.5:7b-instruct
-  ollama_num_ctx: 8192          # Ollama's default context is small and silently truncates RAG prompts
-  anthropic_model: claude-opus-5-5
-  anthropic_effort: medium      # low | medium | high
   timeout_s: 120
+  allow_paid: false             # true = allow paid-only providers (OpenAI)
 
-judge:
-  provider: ollama              # ollama | anthropic (cloud.yaml switches to anthropic)
-  ollama_model: qwen2.5:7b-instruct
-  anthropic_model: claude-haiku-5-5
-  anthropic_effort: low
+judge:                          # P8: grades answers; prefer a different model family than the generator
+  preset: auto                  # auto order: claude-haiku, gemini-flash, mistral-small, groq-llama, ollama, hf
+  ollama_base_url: http://localhost:11434
+  allow_paid: false
 
 api:
   host: 127.0.0.1

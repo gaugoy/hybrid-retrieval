@@ -90,6 +90,10 @@ class Answer(BaseModel):
     timings_ms: dict[str, float]
     usage: dict[str, int] = Field(default_factory=dict)  # input_tokens, output_tokens
     request_id: str
+    # P6: citation checks ("hallucinated_citation", "uncited_answer", "model_refusal", ...)
+    warnings: list[str] = Field(default_factory=list)
+    # P5/P10: fallbacks that ran ("reranker_failed", "filter_returned_nothing", "llm_fallback", ...)
+    degraded: list[str] = Field(default_factory=list)
 
 
 class Evidence(BaseModel):

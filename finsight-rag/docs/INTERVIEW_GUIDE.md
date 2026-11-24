@@ -326,7 +326,17 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 - **Context assembly:** rerank order, a token budget, parent expansion, deduplication. Put the most relevant material first and keep it short ("lost in the middle").
 - **Citation checks:** parse the [n] markers, drop the ones that don't exist, and flag uncited answers. This is a cheap, deterministic guardrail.
 - **Abstention:** in finance, a wrong answer is worse than "not found". It is measured as the false-abstain rate (on answerable questions) and the correct-abstain rate (on unanswerable ones).
-- **Provider abstraction:** one `LLM` interface; Ollama locally, Claude in the cloud; a config switch; fallbacks.
+- **Provider abstraction:** one `LLM` interface; Ollama or a small in-process HF model locally, free-tier APIs (Gemini, Mistral, Groq), Claude in the cloud; one preset switch (`LLM=claude-opus`) or `auto` (first that can run right now).
+
+**What this project uses, and why**
+
+| Choice | Why |
+|---|---|
+| Numbered context blocks `[n] company · doc FY · page` in rerank order, ≤ 6k tokens | The model can cite precisely; the header tells it which year/filing each number comes from |
+| One exact abstain phrase | Abstention becomes measurable (string match), not a vibe |
+| Deterministic citation check + `auto_cite` repair | Small models answer right but ignore the format; code catches invented `[7]`s and repairs missing citations only when the figure is verbatim in a block (flagged) |
+| `auto` LLM selection | Works on any machine: Ollama, a free key, Claude, or fully offline with a 1.5B model |
+| Claude via the SDK with effort + refusal fallbacks, no sampling params | Current API: effort is the depth control; sampling params are rejected; fallbacks keep a declined request alive |
 
 **Most-asked questions**
 1. *"How do you reduce hallucinations in RAG?"*
@@ -337,10 +347,14 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
    → Privacy and data residency, cost at your volume, latency, the quality bar (my 7B vs. Claude on the same retrieval: 📌 vs. 📌 correct), operations (GPU serving with vLLM vs. a managed API). Often the answer is a hybrid: local for cheap steps, the API for the hard ones.
 4. *"How do you make the LLM do arithmetic correctly?"*
    → Ask it to show the formula with cited inputs. Better still, extract the numbers and compute them in Python (a tool call or calculator). Verify with the numeric-match metric.
-5. *"What is prompt injection in RAG, and how do you defend against it?"*
+5. *"Your small model wouldn't cite. What did you do?"*
+   → Measured, then fixed it in code. Qwen2.5-1.5B gave the right number ($1,577M) without `[n]`; adding a one-line example to the prompt made it abstain instead. So citation repair is deterministic: each figure in the answer is matched verbatim against the blocks and that block is cited, flagged `auto_cited` so metrics can separate model-cited from repaired. Small-model prompts are brittle; guardrails belong in code.
+6. *"How do you choose between local and API LLMs in one codebase?"*
+   → One interface, presets per model, and an `auto` resolver with an explicit order and reasons ("no GEMINI_API_KEY", "Ollama not running"). Paid-only providers need an explicit flag. Every answer records provider and model, so eval numbers are always attributable.
+7. *"What is prompt injection in RAG, and how do you defend against it?"*
    → Retrieved text can contain instructions ("ignore previous instructions"). Defenses: tell the model the context is data, use delimiters, give the model the least privilege (no dangerous tools), filter the output, and keep humans in the loop for actions. See the OWASP LLM Top 10.
 
-**📌 Your numbers:** Ollama vs. Claude correctness 📌 · hallucinated-citation rate 📌 · false-abstain rate 📌 · tokens per question 📌
+**📌 Your numbers (P6):** 3M capex with the local 1.5B model: correct ($1,577M), ~3.9k prompt tokens, 117 output tokens, ~11 s on M5 · off-topic question abstains · Ollama/Claude correctness and hallucinated-citation / false-abstain rates: P8
 
 **Go deeper:** [RAG paper](https://arxiv.org/abs/2005.11401) · [OWASP LLM Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/) · [Claude docs: prompt engineering and citations](https://platform.claude.com/docs)
 

@@ -95,7 +95,8 @@ def check_config(settings: Settings) -> CheckResult:
         "Config",
         "ok",
         f"{_rel(settings.config_path, settings.root)} · fingerprint {settings.fingerprint()} · "
-        f"llm={settings.llm.provider} judge={settings.judge.provider} "
+        f"llm={settings.llm.preset or settings.llm.provider} "
+        f"judge={settings.judge.preset or settings.judge.provider} "
         f"rerank={settings.rerank.provider}",
     )
 
@@ -120,7 +121,7 @@ def check_folders(settings: Settings) -> list[CheckResult]:
 
 def check_ollama(settings: Settings, timeout_s: float = 2.0) -> CheckResult:
     base = settings.llm.ollama_base_url.rstrip("/")
-    wanted = settings.llm.ollama_model
+    wanted = settings.llm.model if settings.llm.provider == "ollama" else "qwen2.5:7b-instruct"
     needed = settings.llm.provider == "ollama" or settings.judge.provider == "ollama"
     level: Status = "warn" if needed else "info"
     try:
@@ -144,6 +145,28 @@ def check_ollama(settings: Settings, timeout_s: float = 2.0) -> CheckResult:
     )
 
 
+def check_llm(settings: Settings) -> CheckResult:
+    """Which LLM the generator would use right now (resolves llm.preset=auto)."""
+    from finsight.errors import FinsightError
+    from finsight.generation.llm.factory import resolve_auto
+
+    cfg = settings.llm
+    try:
+        chosen = (
+            resolve_auto(cfg, settings.root, settings.secrets) if cfg.provider == "auto" else cfg
+        )
+    except FinsightError as exc:
+        return CheckResult("LLM", "warn", str(exc), "Add a free key to .env, or install Ollama")
+    hint = (
+        ""
+        if chosen.provider != "hf"
+        else ("Local 1.5B fallback: start Ollama or add a free key (GEMINI/MISTRAL/GROQ)")
+    )
+    return CheckResult(
+        "LLM", "ok", f"{cfg.preset} -> {chosen.preset}: {chosen.provider}:{chosen.model}", hint
+    )
+
+
 def check_secrets(settings: Settings) -> list[CheckResult]:
     """One row per provider key. Missing keys are 'info' unless the config selects that provider."""
     from finsight.config import API_KEY_ENV
@@ -158,11 +181,12 @@ def check_secrets(settings: Settings) -> list[CheckResult]:
     purpose = {
         "anthropic": "Optional: Claude for generation/judging (configs/cloud.yaml)",
         "cohere": "Optional: Cohere trial key (embeddings cohere-v4, reranker comparison)",
-        "gemini": "Optional: free Google AI Studio key (EMBEDDER=gemini-001 / gemini-2)",
+        "gemini": "Optional: free Google AI Studio key (EMBEDDER=gemini-001, LLM=gemini-flash)",
         "openai": "Optional, PAID only: OpenAI embeddings (needs allow_paid)",
-        "mistral": "Optional: free Mistral 'Experiment' key (EMBEDDER=mistral-embed)",
+        "mistral": "Optional: free Mistral key (EMBEDDER=mistral-embed, LLM=mistral-small)",
         "jina": "Optional: free Jina key (EMBEDDER=jina-v3)",
         "voyage": "Optional: free Voyage tokens (EMBEDDER=voyage-3.5-lite)",
+        "groq": "Optional: free Groq key, fast LLMs (LLM=groq-llama)",
     }
     results = []
     for provider, names in API_KEY_ENV.items():
@@ -204,5 +228,6 @@ def run_all_checks(settings: Settings) -> list[CheckResult]:
         check_config(settings),
         *check_folders(settings),
         check_ollama(settings),
+        check_llm(settings),
         *check_secrets(settings),
     ]
