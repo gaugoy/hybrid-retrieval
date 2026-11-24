@@ -379,15 +379,24 @@ def eval_cmd(
         Path("configs/experiments/retrieval_ablation.yaml"), help="Experiment YAML"
     ),
     limit: int | None = typer.Option(None, help="First N questions only"),
+    judge: bool | None = typer.Option(None, "--judge/--no-judge", help="End-to-end: LLM judge"),
 ) -> None:
-    """Run a retrieval evaluation experiment; report in results/. [P5]"""
+    """Run an evaluation experiment; report in results/. [P5 retrieval, P8 end-to-end]
+
+    An experiment with `judge:` or `faithfulness:` keys is end-to-end (answers are generated)."""
     from finsight.evaluation.runner import load_experiment, run_retrieval_eval
     from finsight.observability.logging import configure_logging
 
     settings = load_settings(config)
     configure_logging(settings.logging.level, settings.logging.json_format)
     exp_path = experiment if experiment.is_absolute() else settings.root / experiment
-    out = run_retrieval_eval(settings, load_experiment(exp_path), limit=limit)
+    exp = load_experiment(exp_path)
+    if "judge" in exp or "faithfulness" in exp:
+        from finsight.evaluation.e2e import run_end_to_end_eval
+
+        out = run_end_to_end_eval(settings, exp, limit=limit, use_judge=judge)
+    else:
+        out = run_retrieval_eval(settings, exp, limit=limit)
     console.print((out / "report.md").read_text())
     console.print(f"report: {out}")
 

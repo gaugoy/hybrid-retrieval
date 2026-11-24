@@ -1,0 +1,15 @@
+experiment:
+  name: end_to_end
+  dataset: financebench
+  judge: true
+  faithfulness: false
+  variants:
+  - name: naive
+    pipeline: naive
+  - name: baseline
+    pipeline: hybrid_rerank
+  - name: corrective
+    pipeline: corrective
+limit: 30
+judge: hf:Qwen/Qwen2.5-1.5B-Instruct
+fingerprint: 953f6c92e272
