@@ -26,6 +26,12 @@ hf-qwen1.5b:
   num_ctx: 8192
   notes: "Runs inside Python via transformers (MPS). Free, offline, no server; small model: weaker answers."
 
+hf-qwen0.5b:
+  provider: hf
+  model: Qwen/Qwen2.5-0.5B-Instruct
+  num_ctx: 8192
+  notes: "Smallest local option (~2 GB RAM on CPU): the Docker default without Ollama or keys. Weak answers."
+
 # ------------------------------------------------------------------ Claude (paid API; the cloud profile)
 claude-opus:
   provider: anthropic

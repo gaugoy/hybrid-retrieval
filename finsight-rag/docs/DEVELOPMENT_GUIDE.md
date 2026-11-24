@@ -1070,9 +1070,9 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 - `runbook.md`: how to rebuild the indexes, switch providers, rotate keys, debug a bad answer (find the request ID in the logs, re-run `06_retrieve.py` with the same question, check whether the gold page was retrieved, then check the prompt), and common errors.
 
 **Done when**
-- [ ] On a fresh clone: `make setup data ingest index` then `docker compose up` serves answers at `localhost:8000` and the UI at `localhost:8501`
-- [ ] `12_load_test.py` reports p50/p95 at 5 concurrent users; the numbers go in the README
-- [ ] The ADRs are written
+- [x] ~~`docker compose up`~~ **Changed by decision (2026-11-25): no Docker.** On a fresh clone: `make setup data ingest index`, then three independent processes, `ollama serve` (optional LLM) + `make serve` (API :8000) + `make ui` (UI :8501), serve answers and the UI (verified in P9/P10). Docker files remain optional; the old Docker criterion was at `localhost:8000` and the UI at `localhost:8501`. **Partly verified (2026-11-24):** the image builds (2.8 GB), the Qdrant v1.20.2 container runs, indexing into it took 8.4 s with 27,927/27,927 embedding-cache hits, and the API container came up healthy and `/ready` against the server. **Not verified: answers inside Docker.** The local LLM on Docker's CPU (no GPU on macOS) was OOM-killed in float32 (1.5B ≈ 6 GB in an 8 GB VM); bfloat16 pinned 10 cores for >15 min per answer. Docker now defaults to `hf-qwen0.5b`; for real use, set `LLM=ollama-qwen7b` (Ollama on the host GPU) or a free-tier key. Stopped on purpose: it saturated the laptop's CPU and memory
+- [x] `12_load_test.py` reports p50/p95 at 5 concurrent users; the numbers go in the README (local server, not Docker: 1 user p50 2.5 s / p95 7.8 s; 5 users p50 14.4 s / p95 20.5 s; ~17 req/min; cache hit 0.01 s; 0 errors)
+- [x] The ADRs are written (`docs/adr/0001`–`0004`: vector store, chunking, retrieval, LLM providers) + `docs/runbook.md`
 
 **References:** [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/) · [uv in Docker](https://docs.astral.sh/uv/guides/integration/docker/) · [OWASP Top 10 for LLM apps](https://owasp.org/www-project-top-10-for-large-language-model-applications/) · [Qdrant in Docker](https://qdrant.tech/documentation/quickstart/)
 
@@ -1091,8 +1091,8 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 - Tag `v1.0`
 
 **Done when**
-- [ ] A friend or colleague follows the README from a fresh clone without help
-- [ ] Every number in the README links to a `results/` report
+- [ ] A friend or colleague follows the README from a fresh clone without help. **Pending: needs a person.** The Quickstart is 5 commands, each verified on this machine during P4–P10
+- [x] Every number in the README links to a `results/` report (parsing → `docs/data_card.md`; the load test was saved as `results/2026-11-25_load_test/`)
 
 ---
 
@@ -1112,8 +1112,8 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P7 Advanced | ✅ done | 2026-11-24 | query transforms (multi_query, hyde, decompose), corrective + agentic pipelines, **contextual headers: hit@10 0.613 → 0.673** (150 Q) · query transforms not yet measured (`make eval-advanced`) · MultiHop-RAG loader (609 articles, 2,556 Q, 301 null) via dataset dispatch · **perf fix: query + rerank caches -> re-runs ~19s->0.1s/q and reproducible** · 186 tests |
 | P8 Evaluation | ✅ done (judge human-validation pending) | 2026-11-24 | 30 Q, local 1.5B: numeric match naive 0.24 / **baseline 0.31** / corrective 0.28 · gold page 0.17 / 0.47 / 0.47 · p50 3.8 / 4.8 / 12.8 s · $0 · **local judge rated 90/90 correct (63 disagree with numeric match) → not trusted** · regression gate hit@5 ≥ 0.60 in CI · 198 tests |
 | P9 Serving | ✅ done (demo GIF pending) | 2026-11-24 | FastAPI: /health, /ready, /v1/config, /v1/query, /v1/query/stream (SSE) · Streamlit UI (thin API client) · local 1.5B: **1 user p50 4.3 s / p95 4.9 s; 5 users p50 17.3 s / p95 20.4 s, same throughput** (one GPU model = one request at a time) · time to first token 1.5 s · **bug found by load test: SQLite caches were bound to one thread → fixed with locks** · 212 tests |
-| P10 Production | ⬜ | | |
-| P11 Docs | ⬜ | | |
+| P10 Production | ✅ done (Docker answers not verified) | 2026-11-25 | fallbacks: dense→BM25 (`dense_failed`), LLM chain (`llm_fallback`), reranker→RRF · answer cache keyed by the config fingerprint (hit 0.01 s; degraded answers never cached) · load test 1 user p50 2.5 s, 5 users p50 14.4 s, 0 errors · Docker: image + Qdrant server + healthy API verified, **LLM in Docker too heavy on a Mac** (OOM in fp32, >15 min in bf16) → Ollama on the host · runbook + 4 ADRs · `finsight serve` · 221 tests |
+| P11 Docs | ✅ done (fresh-clone test by a person pending) | 2026-11-25 | README rewritten (pitch → problem → diagram → results table with report links → 5-command quickstart → ADRs → limitations → next steps) · `docs/architecture.md` (Mermaid: processes, indexing, `/v1/query` sequence) · evaluation methodology · every interview 📌 filled (or marked not measured) · parent README section · tag `v1.0` |
 
 Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" boxes ticked)
 
@@ -1142,8 +1142,12 @@ put its numbers in `docs/evaluation.md` (P7) and the P7 📌 line of the intervi
 Local serving runs one model on one GPU, so requests are serialized by `_GPU_LOCK` in `hf_local.py` (and `_ENCODE_LOCK` for the
 embedder). For real concurrency use an inference server that batches (Ollama/vLLM) or a hosted API.
 
-**P10/P11:** not started (Dockerfile, compose, runbook, ADRs, load test, degraded fallbacks; final README, tag v1.0). Docker
-isn't installed on this machine, so mark container steps "not verified locally".
+**P10:** done on `feat/p10-production`. **The app runs without Docker** (user decision): `ollama serve` (optional) + `make serve` + `make ui`,
+each in its own terminal (runbook §1). Docker files are optional and unused: running the LLM in Docker saturated this Mac's CPU and memory.
+
+**P11:** done on `feat/p11-docs`, tagged `v1.0`. All phases are built. Open items (none blocks use): the human judge labels (P8),
+paid-model prices (P8), the demo GIF (P9), the query-transform + MultiHop-RAG runs (P7), and a fresh-clone test by another person (P11).
+Merge order on GitHub: P4 → P5 → … → P11 (each branch builds on the previous one).
 
 ---
 
@@ -1212,6 +1216,11 @@ isn't installed on this machine, so mark container steps "not verified locally".
 | 2026-11-24 | P9 | Streamlit UI calls the HTTP API instead of importing the pipeline | What the demo shows is exactly what an API client gets. The UI process loads no models (and doesn't fight over the Qdrant lock) |
 | 2026-11-24 | P9 | SQLite caches: `check_same_thread=False` + a lock; local models: a process-wide lock | The 5-user load test crashed on thread-bound SQLite connections. MPS models aren't safe to call from several threads at once |
 | 2026-11-24 | P9 | Embedded Qdrant ⇒ a single API worker | The embedded mode locks its folder per process. To scale out, use a Qdrant server (P10) |
+| 2026-11-25 | P10 | Fallbacks only on runtime provider errors; config errors raise | A missing key or a blocked paid provider needs a human; retrying another model would hide the misconfiguration |
+| 2026-11-25 | P10 | Answer cache keyed by the config fingerprint + TTL; degraded answers never cached | A config change can't serve stale answers, and an outage answer doesn't outlive the outage |
+| 2026-11-25 | P10 | Docker: the LLM runs outside the container (Ollama on the host); `hf-qwen0.5b` as the CPU default | Measured: 1.5B fp32 OOM-killed in the 8 GB VM; bf16 >15 min per answer on CPU. Docker on macOS has no GPU |
+| 2026-11-25 | P10 | `/ready` + warmup load the local LLM weights at startup | The first OOM happened on the first user request. Loading at startup makes the failure visible to the health check |
+| 2026-11-25 | P10 | Run as independent processes (LLM server, API, UI); Docker optional and unused | User decision. Locally, containers can't use the Mac GPU and saturated the CPU and memory. Separate processes restart independently and need no extra tooling |
 
 ---
 

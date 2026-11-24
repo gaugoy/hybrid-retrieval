@@ -37,10 +37,17 @@ class HFLocalLLM(LLM):
 
         device = resolve_device(self._device)
         tok = AutoTokenizer.from_pretrained(self.model)
+        # float16 on GPUs. CPU stays float32: bfloat16 halves memory but generation on CPUs without
+        # bf16 kernels (Docker on Apple silicon) took >15 min per answer. Docker uses a 0.5B preset.
         dtype = torch.float16 if device in ("mps", "cuda") else torch.float32
         model = AutoModelForCausalLM.from_pretrained(self.model, dtype=dtype)
         model = model.to(device).eval()  # type: ignore[arg-type]
         return tok, model, device
+
+    def warmup(self) -> None:
+        """Load the weights now (API startup), so memory problems show before the first user."""
+        with _GPU_LOCK:
+            _ = self._loaded
 
     def _inputs(self, system: str, messages: list[dict], max_tokens: int) -> Any:
         tok, _, device = self._loaded

@@ -4,6 +4,7 @@
 
 llm:
   preset: claude-opus
+  fallbacks: [ollama-qwen7b, hf-qwen1.5b]   # P10: if Claude fails (outage, quota), answer locally
 
 judge:
   preset: claude-haiku

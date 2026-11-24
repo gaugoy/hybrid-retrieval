@@ -51,11 +51,6 @@ def show_config(config: Path | None = ConfigOpt) -> None:
     console.print(f"fingerprint: [bold]{settings.fingerprint()}[/]")
 
 
-def _not_yet(phase: str) -> None:
-    console.print(f"[yellow]Not implemented yet. This command arrives in phase {phase}.[/]")
-    raise typer.Exit(2)
-
-
 @app.command()
 def download(
     config: Path | None = ConfigOpt,
@@ -422,9 +417,20 @@ def sample(
 
 
 @app.command()
-def serve() -> None:
-    """Start the FastAPI server. [P9]"""
-    _not_yet("P9")
+def serve(
+    host: str | None = typer.Option(None, help="default: api.host"),
+    port: int | None = typer.Option(None, help="default: api.port"),
+    config: Path | None = ConfigOpt,
+) -> None:
+    """Start the FastAPI server (single worker: embedded Qdrant is one process). [P9]"""
+    import uvicorn
+
+    from finsight.api.main import create_app
+
+    settings = load_settings(config)
+    uvicorn.run(
+        create_app(settings), host=host or settings.api.host, port=port or settings.api.port
+    )
 
 
 if __name__ == "__main__":

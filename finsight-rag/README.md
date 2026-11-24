@@ -1,32 +1,68 @@
 # FinSight RAG
 
-**Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
-embeddings and a local LLM; Claude is optional, by config.
+**Grounded, cited question answering over SEC filings, built and measured end to end, running on a laptop at $0.**
+Ask "What was 3M's FY2018 capital expenditure?" and get `$1,577 million [1]`, where [1] links to the exact page of
+the 10-K. If the filings don't say, it answers *"Not found in the provided filings."*
 
-> Status: **P9 (serving) complete**: FastAPI (`make serve`, docs at http://127.0.0.1:8000/docs) with SSE streaming, plus a Streamlit demo UI (`make ui`) that shows the cited answer and what each retrieval stage did. P8 (end-to-end evaluation) and P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
-> **P8 (end-to-end eval):** on 30 FinanceBench questions with the local 1.5B model: numeric answer match **0.31** (filtered baseline) vs 0.24 naive; gold page retrieved 0.47 vs 0.17; $0. CI regression gate on retrieval. The local LLM judge proved unreliable (90/90 "correct") and isn't used as a metric ([`docs/evaluation.md`](docs/evaluation.md#p8--end-to-end-answer-quality-30-questions-local-qwen251-5b-results2026-11-24_end_to_end)).
-> A demo arrives in P9.
+> **Demo GIF:** not recorded yet. Run `make serve` + `make ui` and open http://localhost:8501
+> (the "Under the hood" panel shows each retrieval stage, the timings and the token usage).
 
-## Docs
+## The problem
 
-| Doc | For |
-|---|---|
-| [`docs/PROJECT_SPEC.html`](docs/PROJECT_SPEC.html) | What and why: problem, dataset, architecture, roadmap (open in a browser) |
-| [`docs/DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md) | How to build it, phase by phase, with a hand-run script per step |
-| [`docs/INTERVIEW_GUIDE.md`](docs/INTERVIEW_GUIDE.md) | Concepts, most-asked interview questions, what to study further |
+Analysts dig through 100–300-page 10-K/10-Q filings. A plain LLM makes up numbers, and a wrong financial number is
+expensive. A trustworthy system has to **find the right page, answer only from it, cite it, and say when it doesn't know**.
+And every design choice should be **measured**, not copied from a blog post.
 
-## Quickstart
+## How it works
 
-Requires macOS (Apple Silicon recommended), [uv](https://docs.astral.sh/uv/), and, from P6 on, [Ollama](https://ollama.com/download).
+```mermaid
+flowchart LR
+    Q([question]) --> F[company/year filter] --> D[dense search<br/>bge-small + Qdrant] --> L[LLM with numbered<br/>context blocks] --> A([answer + page citations])
+    D -. "fails" .-> B[BM25 fallback] -.-> L
+    L -. "provider error" .-> FB[fallback LLM preset]
+```
+
+Offline: PDFs → pages (tables rebuilt as rows) → 384-token chunks with a contextual header → Qdrant + BM25.
+Online: filter → retrieve → generate with a grounding prompt → check citations → abstain if unsupported.
+Full diagrams, including the `/v1/query` sequence: [docs/architecture.md](docs/architecture.md).
+
+## Results (FinanceBench, 150 questions, page-level ground truth)
+
+| What | Result | Report |
+|---|---|---|
+| Parsing: evidence text found on its gold page | **189 / 189** · label–number adjacency 0.28 → **0.97** vs plain extraction | [data_card.md](docs/data_card.md) |
+| Retrieval, dense only (baseline) | hit@10 **0.46** · doc_hit@10 0.89 | [retrieval_ablation](results/2026-11-24_retrieval_ablation/report.md) |
+| Hybrid BM25 + dense, no filter | hit@10 **0.32**: *worse* than dense (boilerplate questions) | [retrieval_ablation](results/2026-11-24_retrieval_ablation/report.md) |
+| + company/year metadata filter (recursive_384) | hit@10 **0.613** · MRR 0.353 · doc_hit 0.993 · ~110 ms | [retrieval_ablation_extra](results/2026-11-24_retrieval_ablation_extra/report.md) |
+| + local cross-encoder rerank (hybrid) | hit@10 0.580 at ~2.7 s, **not adopted** | [retrieval_ablation_extra](results/2026-11-24_retrieval_ablation_extra/report.md) |
+| + contextual chunk headers | hit@10 **0.673** · recall@10 0.629 | [contextual_headers](results/2026-11-24_contextual_headers/report.md) |
+| End to end, local Qwen2.5-1.5B (30 Q) | numeric match naive 0.24 → **filtered 0.31** · corrective 0.28 · $0 | [end_to_end](results/2026-11-24_end_to_end/report.md) |
+| Serving, local process | p50 **2.5 s** (1 user) · 14.4 s (5 users, same throughput) · cache hit 0.01 s · 0 errors | [load_test](results/2026-11-25_load_test/report.md) |
+
+With 150 questions the standard error is about ±0.04, so differences under ~0.05 are noise. Methodology and every
+table: [docs/evaluation.md](docs/evaluation.md). **Honest caveats:** the local LLM judge rated 90/90 answers "correct",
+so it isn't used as a metric (human-label validation pending). The answer-quality numbers use a small 1.5B model;
+stronger models are one env var away but weren't run (no paid usage).
+
+## Quickstart (macOS, Apple Silicon; needs [uv](https://docs.astral.sh/uv/))
 
 ```bash
-cd finsight-rag
-uv python install 3.12
-make setup                 # install dependencies + git hooks
-cp .env.example .env       # optional: add API keys for the cloud profile
-make check-env             # step 00: verify Python, Apple GPU (MPS), packages, Ollama, keys
-make test                  # fast test suite
+cd finsight-rag && make setup       # Python 3.12 + dependencies (uv)
+make data ingest index              # FinanceBench (~166 MB) -> pages -> chunks -> Qdrant + BM25 (~7 min first time)
+make serve                          # terminal 1: backend API  -> http://127.0.0.1:8000/docs
+make ui                             # terminal 2: frontend UI  -> http://localhost:8501
+uv run python scripts/11_smoke_api.py   # terminal 3: health, ready, 3 questions, streaming -> PASS
 ```
+
+No API keys and no Docker needed. The first question downloads the local LLM once (~3 GB).
+Optional: `ollama serve` with `LLM=ollama-qwen7b` (better answers on the Mac GPU), or a free-tier key in `.env`
+(`LLM=gemini-flash`, ...). Paid providers are refused unless you opt in. Operations, troubleshooting and switching
+providers: [docs/runbook.md](docs/runbook.md).
+
+### Learn it step by step
+
+Each phase has a cell-based script (`scripts/NN_*.py`). You can run it in the terminal, cell by cell in VS Code, or as
+a notebook (`make notebooks`):
 
 ```bash
 make data                                   # step 01: download FinanceBench (~166 MB, ~25 s)
@@ -44,6 +80,7 @@ uv run python scripts/10_eval_end_to_end.py --limit 30            # step 10: end
 make serve   # API on :8000      then, in another terminal:
 make ui      # demo UI on :8501  ·  uv run python scripts/11_smoke_api.py  (step 11)
 ```
+
 
 ### Choosing the embedding model (local or online)
 
@@ -67,16 +104,27 @@ Each cell runs one internal step and shows the result as a pandas DataFrame.
 
 Further steps are added phase by phase. `make ingest` parses and chunks on all cores; `make index` embeds and builds both indexes (skipped when up to date). Dataset details: [`docs/data_card.md`](docs/data_card.md).
 
-## Project layout (so far)
+
+## Design decisions
+
+| ADR | Decision | Because (measured) |
+|---|---|---|
+| [0001](docs/adr/0001-vector-store.md) | Qdrant embedded (dev) / server (optional), separate BM25 | No infrastructure; one config switch to a server |
+| [0002](docs/adr/0002-chunking.md) | Recursive 384-token chunks + contextual headers | Best hit@10; headers +6 pts |
+| [0003](docs/adr/0003-retrieval.md) | Dense + company/year filter; hybrid/rerank by config | Filter 0.46 → 0.61; hybrid + rerank 0.58 at 25× the latency |
+| [0004](docs/adr/0004-llm-providers.md) | LLM presets, `auto`, free tiers only, fallback chain | $0 by default, runs offline, survives outages |
+
+## Project layout
 
 ```
-configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
-src/finsight/     the package: config, schemas, container, CLI, data, ingestion, chunking, embedding, indexing
-scripts/          cell-based learning steps (00_check_env … 11_smoke_api)
+configs/          base.yaml + profiles (local, cloud, multihop) + model presets (llms, embedders) + experiments/
+src/finsight/     data · ingestion · chunking · embedding · indexing · retrieval · generation · pipelines ·
+                  evaluation · api · cache · observability · container (wires it all) · cli
+scripts/          cell-based learning steps 00_check_env … 12_load_test (+ notebooks/ generated from them)
 ui/               Streamlit demo UI (a thin client of the API)
-notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
-tests/            unit, integration (fake models) and slow (real data/models) tests
-docs/             spec, development guide, interview guide
+tests/            unit + integration (fake models, offline, ~8 s) + slow; CI regression gate on retrieval
+results/          committed evaluation reports (each with its config + fingerprint)
+docs/             architecture · evaluation · runbook · adr/ · development guide · interview guide · data card · spec
 ```
 
 ## Configuration in one paragraph
@@ -86,6 +134,32 @@ is deep-merged on top, then environment variables (`LLM_PROVIDER=anthropic`, or 
 `FINSIGHT__SECTION__KEY=value`), then overrides passed in code. API keys come only from the environment
 or `.env`. `uv run finsight show-config` prints the resolved config and its **fingerprint**, a hash
 stored with every index and eval result so each number traces back to its exact settings.
+
+## Limitations
+
+- **Answer quality is capped by the local 1.5B model.** It finds the gold page 47% of the time but gets the number 31%.
+  Claude/7B comparisons are wired up but not run.
+- **No validated LLM judge.** The same-model local judge was useless. Validation with 20 human labels (`scripts/10b_label_judge_sample.py`) is pending.
+- **One request at a time per process** on the local model (GPU lock). Throughput is ~17 answers/min.
+- Embedded Qdrant allows one process at a time (close notebook kernels, or use a copy: runbook §1).
+- FinanceBench's open sample is 150 questions: ±0.04 standard error. MultiHop-RAG support exists but hasn't been evaluated yet.
+
+## Next steps
+
+Run a stronger generator (Ollama 7B or a free-tier API) through `make eval` · validate a cross-family judge on human labels
+· finish the query-transform (`make eval-advanced`) and MultiHop-RAG (`make multihop`) runs · an LLM-written contextual
+header (vs the metadata header) · a batching inference server for concurrency · record the demo GIF.
+
+## More docs
+
+| Doc | For |
+|---|---|
+| [architecture.md](docs/architecture.md) | Components, data flow, the `/v1/query` sequence |
+| [evaluation.md](docs/evaluation.md) | Methodology and every results table |
+| [runbook.md](docs/runbook.md) | Run, rebuild, switch providers, debug a bad answer |
+| [DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) | How it was built, phase by phase, with the decision log |
+| [INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md) | Concepts, likely interview questions, my numbers |
+| [data_card.md](docs/data_card.md) · [PROJECT_SPEC.html](docs/PROJECT_SPEC.html) | Dataset details · the original spec |
 
 ## License notes
 

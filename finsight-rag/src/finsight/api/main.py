@@ -38,6 +38,9 @@ def create_app(settings: Settings | None = None, container: Container | None = N
         if settings.api.warmup:
             log.info("warming up", extra=c.describe())
             _ = c.embedder.dim, c.qdrant.count(c.collection), c.llm.model, c.pipeline
+            llm = getattr(c.llm, "primary", c.llm)  # FallbackLLM wraps the primary
+            if hasattr(llm, "warmup"):
+                llm.warmup()  # local models: load the weights at startup, not on request 1
         yield
         c.close()
 

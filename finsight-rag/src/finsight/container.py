@@ -26,6 +26,7 @@ from finsight.observability.logging import get_logger
 if TYPE_CHECKING:
     from qdrant_client import QdrantClient
 
+    from finsight.cache import AnswerCache
     from finsight.chunking.base import Chunker
     from finsight.chunking.tokenizer import Tokenizer
     from finsight.embedding.base import Embedder
@@ -148,6 +149,7 @@ class Container:
             sparse=self.sparse_retriever if mode in ("sparse", "hybrid") else None,
             reranker=self.reranker,
             extractor=self.filter_extractor,
+            sparse_fallback=lambda: self.sparse_retriever,
         )
 
     @cached_property
@@ -157,9 +159,27 @@ class Container:
         from finsight.indexing.pipeline import usage_dir
 
         s = self.settings
-        return build_llm(
+        primary = build_llm(
             s.llm, root=s.root, secrets=s.secrets, usage_dir=usage_dir(s), device=s.embedding.device
         )
+        if not s.llm.fallbacks:
+            return primary
+        from finsight.config import LLMCfg, resolve_llm_preset
+        from finsight.generation.llm.fallback import FallbackLLM
+
+        def build(name: str) -> LLM:
+            cfg = LLMCfg.model_validate(
+                resolve_llm_preset(s.root, {"preset": name, "allow_paid": s.llm.allow_paid})
+            )
+            return build_llm(
+                cfg,
+                root=s.root,
+                secrets=s.secrets,
+                usage_dir=usage_dir(s),
+                device=s.embedding.device,
+            )
+
+        return FallbackLLM(primary, s.llm.fallbacks, build)
 
     @cached_property
     def judge_llm(self) -> LLM:
@@ -175,6 +195,16 @@ class Container:
             usage_dir=usage_dir(s),
             device=s.embedding.device,
         )
+
+    @cached_property
+    def answer_cache(self) -> AnswerCache | None:
+        """Cached answers for the API (P10); None when api.answer_cache is off."""
+        from finsight.cache import AnswerCache
+
+        s = self.settings
+        if not s.api.answer_cache:
+            return None
+        return AnswerCache(s.paths.embed_cache_dir / "answers.sqlite", s.api.answer_cache_ttl_s)
 
     @cached_property
     def pipeline(self) -> RAGPipeline:
