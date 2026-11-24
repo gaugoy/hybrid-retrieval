@@ -88,3 +88,25 @@ def test_build_reranker_attaches_cache(tmp_path: Path) -> None:
     r = build_reranker(RerankCfg(provider="local"), device="cpu", cache_dir=tmp_path)
     assert isinstance(r, LocalCrossEncoderReranker) and r.cache is not None
     assert build_reranker(RerankCfg(provider="local"), device="cpu").cache is None
+
+
+def test_caches_work_across_threads(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The API serves requests from a thread pool: the SQLite caches must not be thread-bound."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import numpy as np
+
+    from finsight.embedding.cache import EmbeddingCache, cached_query_vectors
+
+    cache = EmbeddingCache(tmp_path / "q.sqlite")
+
+    def embed(texts: list[str]) -> np.ndarray:
+        return np.ones((len(texts), 4), dtype=np.float32)
+
+    def one(i: int) -> int:
+        vecs, _ = cached_query_vectors(cache, "m", [f"q{i % 3}"], embed, 4)
+        return int(vecs.shape[0])
+
+    with ThreadPoolExecutor(5) as ex:
+        assert list(ex.map(one, range(20))) == [1] * 20
+    assert len(cache) == 3

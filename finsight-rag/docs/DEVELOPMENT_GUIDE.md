@@ -1039,9 +1039,9 @@ tests/integration/test_api.py      # FastAPI TestClient + Container with fakes
 **Step script `scripts/11_smoke_api.py`.** It calls `/health`, `/ready` and `/v1/query` with 3 questions, then prints the status codes, latency, a preview of each answer and the request IDs.
 
 **Done when**
-- [ ] `make serve` + `scripts/11_smoke_api.py` pass; `make ui` shows the demo
-- [ ] `test_api.py` passes (with fakes)
-- [ ] A ~60-second demo GIF is recorded for the README
+- [x] `make serve` + `scripts/11_smoke_api.py` pass; `make ui` shows the demo (UI driven headlessly with Streamlit AppTest against the live API: answer, citation chips, Under the hood)
+- [x] `test_api.py` passes (with fakes): 11 tests, covering endpoints, validation (422), SSE, request IDs, the rate limit (429) and the body limit (413). Plus `tests/unit/test_streamlit_ui.py`
+- [ ] A ~60-second demo GIF is recorded for the README. **Pending: needs a screen recording by a human** (`make serve` + `make ui`, then record with e.g. Kap or QuickTime and save as `docs/demo.gif`)
 
 **References:** [FastAPI](https://fastapi.tiangolo.com/) · [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/) · [Server-Sent Events (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) · [Streamlit](https://docs.streamlit.io/)
 
@@ -1111,7 +1111,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P6 Generation | ✅ done | 2026-11-24 | LLM presets + auto (Ollama → Claude → Gemini/Mistral/Groq free tiers → local HF) · 3M capex: local Qwen2.5-1.5B answers **$1,577 million** (correct), 11 s, cited via auto_cite · off-topic question abstains · Claude path tested offline (no key) · 175 tests |
 | P7 Advanced | ✅ done | 2026-11-24 | query transforms (multi_query, hyde, decompose), corrective + agentic pipelines, **contextual headers: hit@10 0.613 → 0.673** (150 Q) · query transforms not yet measured (`make eval-advanced`) · MultiHop-RAG loader (609 articles, 2,556 Q, 301 null) via dataset dispatch · **perf fix: query + rerank caches -> re-runs ~19s->0.1s/q and reproducible** · 186 tests |
 | P8 Evaluation | ✅ done (judge human-validation pending) | 2026-11-24 | 30 Q, local 1.5B: numeric match naive 0.24 / **baseline 0.31** / corrective 0.28 · gold page 0.17 / 0.47 / 0.47 · p50 3.8 / 4.8 / 12.8 s · $0 · **local judge rated 90/90 correct (63 disagree with numeric match) → not trusted** · regression gate hit@5 ≥ 0.60 in CI · 198 tests |
-| P9 Serving | ⬜ | | p50 latency: |
+| P9 Serving | ✅ done (demo GIF pending) | 2026-11-24 | FastAPI: /health, /ready, /v1/config, /v1/query, /v1/query/stream (SSE) · Streamlit UI (thin API client) · local 1.5B: **1 user p50 4.3 s / p95 4.9 s; 5 users p50 17.3 s / p95 20.4 s, same throughput** (one GPU model = one request at a time) · time to first token 1.5 s · **bug found by load test: SQLite caches were bound to one thread → fixed with locks** · 212 tests |
 | P10 Production | ⬜ | | |
 | P11 Docs | ⬜ | | |
 
@@ -1136,25 +1136,11 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 **P7 open item:** the query-transform comparison (`make eval-advanced`, 60 Q) hasn't been run to completion yet. When it is,
 put its numbers in `docs/evaluation.md` (P7) and the P7 📌 line of the interview guide.
 
-**P8 state (`feat/p8-eval`)**
-- In the repo (drafts, untested end to end): `evaluation/generation_metrics.py`, `evaluation/judge.py` (+ prompts
-  `judge_correctness.md`, `judge_faithfulness.md`), `evaluation/e2e.py`, `observability/cost.py`,
-  `configs/experiments/end_to_end.yaml`, `tools/build_regression_set.py`, scripts `10_eval_end_to_end.py`, `10b_label_judge_sample.py`,
-  tests `unit/test_judge.py`, `unit/test_generation_metrics.py`, `integration/test_regression_gate.py`.
-- Done: `LLMCfg.price_in/price_out` (USD per 1M tokens, default 0) and `ApiCfg.rate_limit_per_minute` added to `config.py`.
-- To do, in order:
-  1. ✅ Regression gate: `tests/fixtures/regression_set.jsonl` (10 Q × 10 chunks, built by `tools/build_regression_set.py`) +
-     `regression_thresholds.json` (hybrid hit@5 = 0.60 measured, deterministic). 198 tests pass.
-  2. Set `price_in`/`price_out` on the paid presets in `configs/llms.yaml` from the providers' current pricing pages. Don't guess:
-     a $0 estimate is better than a wrong one. Free tiers and local stay 0.
-  3. ✅ Wired: `finsight eval` runs end-to-end when the experiment has `judge:`/`faithfulness:`; `make eval LIMIT=30`.
-     3 Q × 3 pipelines + judge = ~3 min on the local LLM. A 30-Q run → `results/2026-11-24_end_to_end/`; record its numbers.
-  4. ⏳ Judge validation (script 10b) needs human labels (the user). The local judge is documented as **untrusted** (90/90 "correct").
-  5. ✅ 30-Q results in `evaluation.md`, the interview guide, the tracker and the README. Still open: prices (2) and human labels (4).
+**P8:** done on `feat/p8-eval`. Still open: the human judge labels (`scripts/10b_label_judge_sample.py`) and the paid-model prices in `configs/llms.yaml`.
 
-**P9 drafts:** `src/finsight/api/` (models, middleware, deps, routes, main) is on disk **untracked**. Leave it out of the P8
-commit. Known issue: `api/main.py:57-58` uses `app` before it is defined (mypy). Still to write: `ui/streamlit_app.py`,
-`scripts/11_smoke_api.py`, `tests/integration/test_api.py`, `make serve` / `make ui`.
+**P9:** done on `feat/p9-serving`. `make serve` (API :8000) + `make ui` (Streamlit :8501). Still open: the demo GIF (needs a human).
+Local serving runs one model on one GPU, so requests are serialized by `_GPU_LOCK` in `hf_local.py` (and `_ENCODE_LOCK` for the
+embedder). For real concurrency use an inference server that batches (Ollama/vLLM) or a hosted API.
 
 **P10/P11:** not started (Dockerfile, compose, runbook, ADRs, load test, degraded fallbacks; final README, tag v1.0). Docker
 isn't installed on this machine, so mark container steps "not verified locally".
@@ -1223,6 +1209,9 @@ isn't installed on this machine, so mark container steps "not verified locally".
 | 2026-11-24 | P8 | Regression gate threshold = measured hit@5 (0.60), not a margin below it | FakeEmbedder + BM25 is deterministic, so any drop is a real regression |
 | 2026-11-24 | P8 | Corrective RAG not adopted as the default | 30 Q: numeric match 0.28 vs 0.31, p50 latency 12.8 s vs 4.8 s with a 1.5B grader. Re-test with a stronger LLM |
 | 2026-11-24 | P8 | Paid-model prices left at $0 until filled in from the providers' pages | A wrong cost estimate is worse than none |
+| 2026-11-24 | P9 | Streamlit UI calls the HTTP API instead of importing the pipeline | What the demo shows is exactly what an API client gets. The UI process loads no models (and doesn't fight over the Qdrant lock) |
+| 2026-11-24 | P9 | SQLite caches: `check_same_thread=False` + a lock; local models: a process-wide lock | The 5-user load test crashed on thread-bound SQLite connections. MPS models aren't safe to call from several threads at once |
+| 2026-11-24 | P9 | Embedded Qdrant ⇒ a single API worker | The embedded mode locks its folder per process. To scale out, use a Qdrant server (P10) |
 
 ---
 

@@ -67,10 +67,12 @@ class ScoreCache:
 
     def __init__(self, path: Path, model: str) -> None:
         import sqlite3
+        import threading
 
         path.parent.mkdir(parents=True, exist_ok=True)
         self.model = model
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, check_same_thread=False)  # API thread pool
+        self._lock = threading.Lock()
         self._db.execute("CREATE TABLE IF NOT EXISTS rr (key TEXT PRIMARY KEY, score REAL)")
 
     def _key(self, query: str, chunk_id: str, text: str) -> str:
@@ -81,17 +83,17 @@ class ScoreCache:
         out: dict[int, float] = {}
         for i, c in enumerate(candidates):
             key = self._key(query, c.chunk.chunk_id, c.chunk.text)
-            row = self._db.execute("SELECT score FROM rr WHERE key = ?", (key,)).fetchone()
+            with self._lock:
+                row = self._db.execute("SELECT score FROM rr WHERE key = ?", (key,)).fetchone()
             if row is not None:
                 out[i] = float(row[0])
         return out
 
     def put(self, query: str, scored: list[tuple[RetrievedChunk, float]]) -> None:
-        self._db.executemany(
-            "INSERT OR REPLACE INTO rr VALUES (?, ?)",
-            [(self._key(query, c.chunk.chunk_id, c.chunk.text), s) for c, s in scored],
-        )
-        self._db.commit()
+        rows = [(self._key(query, c.chunk.chunk_id, c.chunk.text), s) for c, s in scored]
+        with self._lock:
+            self._db.executemany("INSERT OR REPLACE INTO rr VALUES (?, ?)", rows)
+            self._db.commit()
 
 
 def hash_text(text: str) -> str:
