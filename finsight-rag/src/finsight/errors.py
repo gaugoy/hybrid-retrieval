@@ -25,4 +25,21 @@ class IndexNotBuiltError(FinsightError):
 
 
 class ProviderError(FinsightError):
-    """An external provider (Ollama, Anthropic, Cohere) failed after retries."""
+    """An external provider (Ollama, Anthropic, Cohere, Gemini, ...) failed after retries."""
+
+
+class RateLimitedError(ProviderError):
+    """Still rate-limited (HTTP 429) after every retry. Lower the preset's rpm/tpm and re-run."""
+
+
+class QuotaExhaustedError(ProviderError):
+    """A daily/monthly quota or the run's token budget is used up. Work done so far is cached:
+    re-run after the quota resets and it continues where it stopped."""
+
+
+class MissingAPIKeyError(ConfigError):
+    """An online provider was selected but its API key is not in the environment / .env."""
+
+
+class PaidProviderBlockedError(ConfigError):
+    """A paid-only provider was selected while embedding.allow_paid is false."""

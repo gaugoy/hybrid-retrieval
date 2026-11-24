@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P3 (chunking) complete**: 4 strategies × 3 sizes compared ([`docs/evaluation.md`](docs/evaluation.md)); default page-aware, 384 tokens. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
+> Status: **P4 (embedding & indexing) complete**: 31,114 page-aware chunks embedded with bge-small (106 chunks/s on the Apple GPU, ~5 min) into Qdrant (embedded) + BM25; re-runs are skipped by a manifest. **Any embedder by config**: local (bge, Ollama) or online free tiers (Gemini, Mistral, Cohere, Jina, Voyage), rate-limited and quota-aware, with a comparison report. Results in [`docs/evaluation.md`](docs/evaluation.md). See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -32,6 +32,17 @@ make data                                   # step 01: download FinanceBench (~1
 uv run python scripts/02_explore_data.py   # step 02: explore questions, evidence and consistency checks
 uv run python scripts/03_parse_pdfs.py     # step 03: parse PDFs into clean pages + evidence check (~70 s)
 uv run python scripts/04_chunk.py          # step 04: chunk pages (4 strategies), quality stats; --sweep compares all
+uv run python scripts/05_embed_and_index.py  # step 05: embed chunks (~5 min first time), build Qdrant + BM25, sanity queries
+uv run python scripts/05b_compare_embedders.py   # step 05b: compare embedders (local vs online) on the same chunks
+```
+
+### Choosing the embedding model (local or online)
+
+```bash
+uv run finsight embedders                    # presets, key status, free/paid, requests/time/quota estimates
+echo "GEMINI_API_KEY=..." >> .env            # any free key you have (see .env.example for the links)
+uv run finsight index --embedder gemini-001 --limit-questions 30   # its own collection; nothing overwritten
+make compare-embedders E=bge-small,gemini-001 Q=30   # compare on 30 questions' filings (free-tier friendly)
 ```
 
 ### Run any step three ways
@@ -45,16 +56,16 @@ uv run python scripts/04_chunk.py          # step 04: chunk pages (4 strategies)
 
 Each cell runs one internal step and shows the result as a pandas DataFrame.
 
-Further steps are added phase by phase. `make ingest` parses and chunks on all cores; `make index` arrives in P4. Dataset details: [`docs/data_card.md`](docs/data_card.md).
+Further steps are added phase by phase. `make ingest` parses and chunks on all cores; `make index` embeds and builds both indexes (skipped when up to date). Dataset details: [`docs/data_card.md`](docs/data_card.md).
 
 ## Project layout (so far)
 
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
-src/finsight/     the package: config, schemas, errors, container, CLI, observability, diagnostics
-scripts/          cell-based learning steps (00_check_env … 04_chunk)
+src/finsight/     the package: config, schemas, container, CLI, data, ingestion, chunking, embedding, indexing
+scripts/          cell-based learning steps (00_check_env … 05_embed_and_index)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
-tests/            unit tests (more integration tests from P4 on)
+tests/            unit, integration (fake models) and slow (real data/models) tests
 docs/             spec, development guide, interview guide
 ```
 

@@ -113,6 +113,9 @@ def configure_logging(level: str = "INFO", json_format: bool = False) -> None:
         "filelock",
     ):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
+    # bm25s logs every index build at DEBUG; the HF hub warns about anonymous downloads.
+    logging.getLogger("bm25s").setLevel(max(logging.INFO, root.level))
+    logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
 
 
 def get_logger(name: str) -> logging.Logger:

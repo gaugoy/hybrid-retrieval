@@ -48,9 +48,9 @@ def test_cli_help_lists_commands() -> None:
 
 
 def test_cli_unbuilt_command_names_its_phase() -> None:
-    result = CliRunner().invoke(app, ["index"])
+    result = CliRunner().invoke(app, ["query", "What was 3M's capex?"])
     assert result.exit_code == 2
-    assert "P4" in result.output
+    assert "P6" in result.output
 
 
 def test_schema_contracts_basic() -> None:

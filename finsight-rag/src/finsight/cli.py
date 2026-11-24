@@ -128,11 +128,7 @@ def chunk(
     """Chunk pages.parquet with the configured (or given) strategy. [P3]"""
     from finsight.chunking.pipeline import run_sweep, save_sweep_report, to_markdown
 
-    overrides: dict[str, object] = {}
-    if strategy:
-        overrides["strategy"] = strategy
-    if tokens:
-        overrides["child_tokens" if strategy == "parent_child" else "chunk_tokens"] = tokens
+    overrides = _chunking_overrides(strategy, tokens)
     settings = load_settings(config, {"chunking": overrides} if overrides else None)
     if sweep:
         df = run_sweep(settings, force=force)
@@ -143,10 +139,138 @@ def chunk(
     _chunk(settings, force=force)
 
 
+def _chunking_overrides(strategy: str | None, tokens: int | None) -> dict[str, object]:
+    overrides: dict[str, object] = {}
+    if strategy:
+        overrides["strategy"] = strategy
+    if tokens:
+        overrides["child_tokens" if strategy == "parent_child" else "chunk_tokens"] = tokens
+    return overrides
+
+
+EmbedderOpt = typer.Option(
+    None,
+    "--embedder",
+    "-e",
+    help="Embedding preset (configs/embedders.yaml; list: finsight embedders)",
+)
+
+
+def _settings(
+    config: Path | None, strategy: str | None, tokens: int | None, embedder: str | None
+) -> Settings:
+    overrides: dict[str, object] = {}
+    chunking = _chunking_overrides(strategy, tokens)
+    if chunking:
+        overrides["chunking"] = chunking
+    if embedder:
+        overrides["embedding"] = {"preset": embedder}
+    return load_settings(config, overrides or None)
+
+
 @app.command()
-def index() -> None:
-    """Embed chunks and build the Qdrant + BM25 indexes. [P4]"""
-    _not_yet("P4")
+def embedders(
+    config: Path | None = ConfigOpt,
+    estimate: bool = typer.Option(True, help="Estimate requests/time/cost for the current chunks"),
+) -> None:
+    """List embedding presets: provider, free/paid, API-key status, cost and time estimates. [P4]"""
+    from finsight.chunking.pipeline import load_chunks_df
+    from finsight.embedding.catalog import catalog_df
+    from finsight.errors import DataNotFoundError
+
+    settings = load_settings(config)
+    texts = None
+    if estimate:
+        try:
+            texts = load_chunks_df(settings)["embed_text"].tolist()
+        except DataNotFoundError:
+            console.print("[dim](no chunks yet: run make ingest for estimates)[/]")
+    from rich.table import Table
+
+    df = catalog_df(settings, texts)
+    table = Table(header_style="bold", title="Embedding presets (configs/embedders.yaml)")
+    cols = ["preset", "provider", "model", "dims", "cost", "key"]
+    if texts is not None:
+        cols += ["requests", "minutes_at_limits", "quota", "usd"]
+    for c in cols:
+        table.add_column(c.replace("minutes_at_limits", "min @ limits"), overflow="fold")
+    for row in df[cols].itertuples(index=False):
+        cells = ["?" if isinstance(v, float) and v != v else str(v) for v in row]
+        ready = row.key in ("set", "not needed")
+        table.add_row(*cells, style="red" if row.cost == "PAID" else ("green" if ready else "dim"))
+    console.print(table)
+    console.print(
+        f"\ncurrent: embedding.preset = {settings.embedding.preset}  "
+        "(set EMBEDDER=<preset> in .env, or pass --embedder)"
+    )
+    if texts is not None:
+        console.print(
+            f"estimates for {len(texts):,} chunks of {settings.chunking.strategy}_"
+            f"{settings.chunking.chunk_tokens}; notes: configs/embedders.yaml"
+        )
+
+
+@app.command()
+def index(
+    config: Path | None = ConfigOpt,
+    strategy: str | None = typer.Option(None, help="fixed | recursive | page_aware | parent_child"),
+    tokens: int | None = typer.Option(None, help="chunk_tokens (child_tokens for parent_child)"),
+    embedder: str | None = EmbedderOpt,
+    limit_questions: int | None = typer.Option(
+        None, help="Only index the filings the first N questions need (free-tier trials)"
+    ),
+    only: str = typer.Option("all", help="all | dense | sparse"),
+    force: bool = typer.Option(False, help="Rebuild even if the manifest says up to date"),
+) -> None:
+    """Embed chunks and build the Qdrant + BM25 indexes (chunks first if needed). [P4]"""
+    from finsight.indexing.pipeline import index_corpus, subset_for_questions
+    from finsight.observability.logging import configure_logging
+
+    if only not in ("all", "dense", "sparse"):
+        raise typer.BadParameter("--only must be all, dense or sparse")
+    settings = _settings(config, strategy, tokens, embedder)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    _chunk(settings)
+    docs, tag = subset_for_questions(settings, limit_questions) if limit_questions else (None, None)
+    r = index_corpus(settings, force=force, only=only, doc_names=docs, tag=tag)  # type: ignore[arg-type]
+    console.print(
+        f"dense: {r.collection} points={r.qdrant_points} skipped={r.dense_skipped} "
+        f"device={r.device} cache hits/misses={r.cache_hits}/{r.cache_misses} "
+        f"chunks/s={r.chunks_per_s} size={r.qdrant_mb}MB"
+    )
+    console.print(
+        f"sparse: {r.bm25_dir} docs={r.bm25_docs} vocab={r.bm25_vocab} "
+        f"skipped={r.bm25_skipped} size={r.bm25_mb}MB · total {r.elapsed_s}s"
+    )
+    if r.api_requests:
+        console.print(f"api: {r.api_requests} requests, ~{r.api_est_tokens:,} tokens")
+
+
+@app.command("compare-embedders")
+def compare_embedders_cmd(
+    config: Path | None = ConfigOpt,
+    embedders: str = typer.Option(
+        "bge-small,bge-small-noinstr", help="Comma-separated presets (finsight embedders)"
+    ),
+    limit_questions: int | None = typer.Option(
+        None, help="Use the first N questions and only their filings (recommended for free tiers)"
+    ),
+    force: bool = typer.Option(False, help="Rebuild the indexes"),
+) -> None:
+    """Dense-retrieval comparison of embedders (local vs online) on the same chunks. [P4]"""
+    from finsight.evaluation.embedder_compare import compare_embedders, save_report
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    _chunk(settings)
+    presets = [p.strip() for p in embedders.split(",") if p.strip()]
+    comp = compare_embedders(settings, presets, limit_questions=limit_questions, force=force)
+    if not comp.summary.empty:
+        console.print(comp.summary.to_string())
+    for preset, why in comp.skipped.items():
+        console.print(f"[yellow]skipped {preset}: {why}[/]")
+    console.print(f"report: {save_report(settings, comp)}")
 
 
 @app.command()

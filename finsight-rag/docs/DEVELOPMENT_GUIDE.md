@@ -237,7 +237,7 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 
 ### 3.6 Makefile targets
 
-`make help` lists the real targets; the Makefile is the source of truth. As of P3:
+`make help` lists the real targets; the Makefile is the source of truth. As of P4:
 
 | Target | Runs | Phase |
 |---|---|---|
@@ -248,7 +248,9 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 | `make data` | `scripts/01_download_data.py` | P1 |
 | `make ingest` | `finsight ingest --workers 0`: parse PDFs on all cores, then chunk with the configured strategy | P2 + P3 |
 | `make chunk-sweep` | `finsight chunk --sweep`: every strategy × size, report in `results/` | P3 |
-| `make index`, `make eval-retrieval`, `make eval`, `make serve`, `make ui` | placeholders until P4, P5, P8, P9 | later |
+| `make index` | `finsight index`: chunk if needed, embed (cached), build Qdrant + BM25; skipped when up to date (`EMBEDDER=<preset> make index`) | P4 |
+| `make embedders` / `make compare-embedders E=a,b Q=30` | the preset catalog (keys, cost, time) · dense-retrieval comparison, report in `results/` | P4 |
+| `make eval-retrieval`, `make eval`, `make serve`, `make ui` | placeholders until P5, P8, P9 | later |
 
 Learning scripts (`scripts/NN_*.py`) run single-process and print everything; `make` targets call the concise
 `finsight` CLI, which can use all cores (see P2 on why processes and cell-based scripts don't mix on macOS).
@@ -367,17 +369,24 @@ class Chunker(ABC):
     def chunk(self, pages: list[Page], meta: DocumentMeta) -> list[Chunk]: ...
 
 
-# embedding/base.py
+# embedding/base.py   (P4: slug, provider, embed_queries, preferred_batch added — see §7)
 class Embedder(ABC):
-    model_name: str
+    model_name: str  # identity of the vectors: cache keys + index manifest
+    slug: str  # file / collection name part, e.g. "bge-small-en-v1-5", "gemini-gemini-embedding-001-768"
     dim: int
+    provider: str = "local"
 
     @abstractmethod
     def embed_documents(
-        self, texts: list[str]
-    ) -> np.ndarray: ...  # (n, dim) float32, L2-normalized
+        self, texts: list[str], progress: bool = False
+    ) -> np.ndarray: ...  # (n, dim) float32, L2-normalized (document_template applied)
     @abstractmethod
-    def embed_query(self, text: str) -> np.ndarray: ...  # (dim,), L2-normalized
+    def embed_query(
+        self, text: str
+    ) -> np.ndarray: ...  # (dim,), L2-normalized (query_template applied)
+    def embed_queries(
+        self, texts: list[str]
+    ) -> np.ndarray: ...  # batched; online: one request + cache
 
 
 # retrieval/base.py
@@ -691,72 +700,124 @@ overlap → header carry on/off → parent/children → corpus chunking with qua
 **Goal:** dense vectors in Qdrant and a BM25 index, both rebuilt only when their inputs change.
 **Concepts:** bi-encoders, normalization and cosine similarity, ANN/HNSW, payload filtering, idempotency. See Interview Guide §P4.
 
-**Files**
+**Files (as built)**
 ```
-src/finsight/embedding/__init__.py  base.py  sentence_transformer.py  cache.py  fake.py
-src/finsight/indexing/__init__.py  qdrant_store.py  bm25_store.py  manifest.py  pipeline.py
-scripts/05_embed_and_index.py
+src/finsight/embedding/base.py                 # Embedder ABC, build_embedder(cfg) ("fake*" → FakeEmbedder), model_slug, l2_normalize
+src/finsight/embedding/sentence_transformer.py # SentenceTransformerEmbedder: lazy model, device auto (mps/cuda/cpu), query instruction
+src/finsight/embedding/cache.py                # EmbeddingCache (SQLite), cache_key, embed_with_cache → (vectors, CacheStats)
+src/finsight/embedding/fake.py                 # FakeEmbedder(dim=32): hashed word n-grams, deterministic
+src/finsight/indexing/manifest.py              # Manifest (indexes/manifest.json), chunks_sha256, needs_rebuild, record
+src/finsight/indexing/qdrant_store.py          # open_client, QdrantStore (recreate, upsert_chunks, search, count), build_filter, point_id
+src/finsight/indexing/bm25_store.py            # BM25Index (build, save, load, search with mask), tokenize
+src/finsight/indexing/pipeline.py              # index_corpus → IndexReport; build_dense, build_sparse; names and paths
+scripts/05_embed_and_index.py                  # cell-based: cosine → query instruction → cache → build → BM25 tokens → manifest → sanity → filter → gold rank
 tests/unit/test_manifest.py  tests/unit/test_embed_cache.py
-tests/integration/test_index_roundtrip.py   # FakeEmbedder + fixture chunks
+tests/integration/test_index_roundtrip.py      # FakeEmbedder + synthetic chunks, embedded Qdrant in a tmp dir
+tests/slow/test_index_real.py                  # the real indexes are complete; the 3M gold page is findable
 ```
+The `Container` gained `embedder`, `qdrant_client` (one per process: embedded mode locks its folder), `qdrant`, `collection`,
+`bm25` and `close()`. CLI: `finsight index [--strategy S --tokens N --only all|dense|sparse --force]` (chunks first if needed);
+`make index`.
 
-**Implementation notes**
-- `sentence_transformer.py`:
-  - `SentenceTransformer("BAAI/bge-small-en-v1.5", device="mps" if torch.backends.mps.is_available() else "cpu")`
-  - documents: `model.encode(texts, batch_size=64, normalize_embeddings=True, convert_to_numpy=True)`
-  - queries: for bge v1.5, add the prefix `"Represent this sentence for searching relevant passages: "` to the **query only** (make it configurable as `embedding.query_instruction`). Measure with and without it in P5.
-- `cache.py`: SQLite table `(key TEXT PRIMARY KEY, vec BLOB)`, where `key = sha256(model_name + "\x00" + text)`. Use `embed_with_cache(embedder, texts)` to embed only the misses. Re-chunking then costs only the new text.
-- `fake.py`: `FakeEmbedder(dim=32)`, a deterministic vector from hashing word n-grams. Used in tests and CI.
-- `qdrant_store.py`:
-  ```python
-  from qdrant_client import QdrantClient, models
+**Implementation notes (as built)**
+- **Embeddings:** `SentenceTransformer(model, device=...)`, `encode(..., normalize_embeddings=True)`, batch 64. The query
+  instruction is passed as `prompt=` to **queries only**. sentence-transformers 6 renamed `get_sentence_embedding_dimension` to
+  `get_embedding_dimension` (both handled).
+- **Cache:** `key = sha256(model + "\x00" + text)`; texts are de-duplicated before embedding (239 of 31,114 page-aware chunks
+  repeat another chunk's text); misses are embedded 1,024 at a time and written after each batch, so an interrupted run resumes.
+- **Qdrant:** collection `f"{dataset}__{config_name}__{model_slug}"` (e.g. `financebench__page_aware_384__bge-small-en-v1-5`),
+  COSINE distance, point id `uuid5(NAMESPACE_URL, chunk_id)`, payload = the whole `Chunk`, upserts of 256. `build_filter` →
+  `FieldCondition(key, MatchAny(any=[...]))` for company / doc_period / doc_type. Payload indexes are created **only on a
+  server**: embedded mode ignores them (and warns), and it searches by brute force.
+- **BM25:** `bm25s.tokenize(stopwords="en")` (lowercase, ≥ 2-char words, no stemming), `BM25()` defaults (k1 1.5, b 0.75,
+  Lucene), saved to `indexes/bm25/<config>/` + `chunk_ids.txt`. Queries are tokenized as strings and looked up in the index's
+  vocabulary (unknown words score 0). **Filters use bm25s's `weight_mask`** (applied before ranking) instead of "retrieve 4k,
+  then drop": exact, and always k results when k exist.
+- **Manifest:** rebuild iff `chunks_sha256` (hash of `chunk_id` + `embed_text`), `embed_model` or `INDEX_VERSION` changed, or
+  the index on disk is incomplete (point count ≠ chunk count, `chunk_ids.txt` missing). The config fingerprint is stored but
+  doesn't trigger rebuilds (changing the LLM must not re-embed). Writes are atomic (temp file + rename).
 
-  client = (
-      QdrantClient(path=str(settings.paths.qdrant))
-      if not settings.qdrant_url
-      else QdrantClient(url=settings.qdrant_url)
-  )
-  client.create_collection(
-      name, vectors_config=models.VectorParams(size=dim, distance=models.Distance.COSINE)
-  )
-  client.create_payload_index(
-      name, "company", models.PayloadSchemaType.KEYWORD
-  )  # ditto doc_period (INTEGER), doc_type
-  client.upsert(
-      name,
-      points=[
-          models.PointStruct(
-              id=str(uuid.uuid5(uuid.NAMESPACE_URL, c.chunk_id)),
-              vector=v.tolist(),
-              payload=c.model_dump(),
-          )
-      ],
-  )
-  hits = client.query_points(
-      name, query=qvec.tolist(), limit=k, query_filter=flt, with_payload=True
-  ).points
-  ```
-  - Name collections `f"{dataset}__{strategy}_{chunk_tokens}__{model_slug}"`.
-  - **Point IDs must be an unsigned int or a UUID**, so use `uuid5` of the `chunk_id`. Upsert in batches of 256.
-  - `build_filter(QueryFilters) -> models.Filter | None` uses `FieldCondition(key=..., match=models.MatchAny(any=[...]))`.
-- `bm25_store.py`: `bm25s.tokenize(embed_texts, stopwords="en")`, then `BM25().index(tokens)`, then `save(dir)`, plus `chunk_ids.txt` in the same order (the experiment's pattern). BM25 has no native filters, so **filter after retrieval**: retrieve `k * 4`, drop non-matching chunks, keep the top `k`.
-- `manifest.py`: `indexes/manifest.json` maps each collection name to `{chunks_sha256, embed_model, n_chunks, dim, built_at, config_fingerprint}`. `needs_rebuild(name, chunks_path, model)` compares hashes.
-
-**Step script `scripts/05_embed_and_index.py --strategy page_aware --chunk-tokens 384 [--force]`.** It prints:
-- the device in use, the number of chunks, cache hits and misses, embedding throughput (chunks/s), total time
-- the Qdrant collection's point count, the BM25 vocabulary size, the on-disk sizes
-- a **sanity query**, `"3M capital expenditure 2018"`: the top 3 from dense and from BM25, each with doc_name, page (as printed) and score
-- on a re-run, "skipped (manifest up to date)"
+**Step script `scripts/05_embed_and_index.py [--strategy S --tokens N] [--force]`.** Embedding settings → cosine similarity of
+3 sample texts → query instruction on/off → cache status → build/skip both indexes (IndexReport) → what BM25 tokens look like →
+the manifest → sanity query (top 3 dense and BM25, printed pages) → company filter → **gold-page rank for FinanceBench's 3M
+capex question** in each index.
 
 **Done when**
-- [ ] Full indexing of the default strategy succeeds on the Mac; time and size are recorded in §6 and the README
-- [ ] A re-run is a no-op; `--force` rebuilds
-- [ ] The integration round-trip test passes with `FakeEmbedder`
+- [x] Full indexing of the default strategy succeeds on the Mac: **31,114 chunks in 5 min 6 s** (embedding 293 s at
+  106 chunks/s on MPS, Qdrant upsert 11 s, BM25 1.9 s); Qdrant 244 MB, BM25 25 MB, cache 66 MB; peak RSS 1.2 GB
+- [x] A re-run is a no-op (0.07 s, "skipped"); `--force` rebuilds, with every vector from the cache
+- [x] The integration round-trip test passes with `FakeEmbedder` (search, filters, mask, skip, force, missing collection)
 
-**Pitfalls:**
-- Embedded Qdrant mode **locks its folder**: only one process at a time. Don't run the API and a script together in embedded mode; use Qdrant in Docker when you need both.
-- Mixing normalized and unnormalized vectors.
-- Forgetting the query instruction at query time, or adding it to documents.
+**Pitfalls (met while building):**
+- `if cache:` on an object with `__len__` is **False when the cache is empty**, so the first version silently never cached.
+  Use `is not None`.
+- Embedded Qdrant **locks its folder**: one process at a time. Close notebooks before running the CLI (`Container.close()`).
+- Embedded mode warns above 20,000 points; we log the limitation once. The production answer is a Qdrant server (P10).
+- Mixing normalized and unnormalized vectors; adding the query instruction to documents.
+
+#### P4b — Online embedders and the embedder comparison (added on request)
+
+**Goal:** any embedding model, local or online, selectable by config, compared on the same chunks; free tiers only, never a
+surprise bill. The same provider plumbing is reused by rerankers (P5) and LLMs (P6).
+
+**Files (as built)**
+```
+configs/embedders.yaml                         # presets: bge-small (default), bge-small-noinstr, bge-base, ollama-nomic,
+                                               #   gemini-001, gemini-2, mistral-embed, cohere-v4, jina-v3, voyage-3.5-lite,
+                                               #   openai-3-small / -large (PAID, blocked unless allow_paid)
+src/finsight/providers/ratelimit.py            # RateLimiter (rpm spacing, tpm window, rpd/rpmonth caps), UsageStore, estimate_tokens
+src/finsight/providers/http.py                 # post_json: retry 429/5xx/timeouts with backoff + Retry-After; quota-429 → stop
+src/finsight/embedding/remote.py               # ProviderSpec table, RemoteEmbedder + 3 wire formats: OpenAIStyle (OpenAI, Mistral,
+                                               #   Jina, Voyage, Ollama), Gemini (batchEmbedContents), Cohere (v2 /embed)
+src/finsight/embedding/catalog.py              # catalog_df (key status, free/paid, estimates), estimate(), preset_cfg()
+src/finsight/evaluation/retrieval_metrics.py   # hit/recall/ndcg/doc_hit@k, mrr (the P5 contract, built early)
+src/finsight/evaluation/embedder_compare.py    # compare_embedders, summarize, by_question_type, disagreements, save_report
+scripts/05b_compare_embedders.py               # cell-based: catalog → plan (requests/time/quota) → run → breakdown → report
+tests/unit/test_providers.py  test_remote_embedders.py  test_embedder_config.py  test_retrieval_metrics.py
+tests/integration/test_embedder_compare.py     # two fake presets + one without a key (skipped, reported)
+```
+CLI: `finsight embedders` (the catalog), `finsight index --embedder P [--limit-questions N]`,
+`finsight compare-embedders --embedders a,b [--limit-questions N]`; `make embedders`, `make compare-embedders E=a,b Q=30`.
+
+**How selection works**
+- `embedding.preset` (env `EMBEDDER=gemini-001`, or `--embedder`) fills provider, model, dimensions, templates, role params and
+  rate limits from `configs/embedders.yaml`. Anything set explicitly (`FINSIGHT__EMBEDDING__DIMENSIONS=1536`, a profile YAML,
+  overrides) wins. `base.yaml` keeps only the preset name and generic knobs (`device`, `batch_size`, `allow_paid`,
+  `max_tokens_per_run`).
+- The API key is picked by provider (`GEMINI_API_KEY` or `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `COHERE_API_KEY`, `JINA_API_KEY`,
+  `VOYAGE_API_KEY`, `OPENAI_API_KEY`). Missing key → `MissingAPIKeyError` naming the variable and where to get a free key.
+- **Zero-spend guard:** providers without a free tier (OpenAI) raise `PaidProviderBlockedError` unless `allow_paid: true`.
+  `max_tokens_per_run` is a hard stop checked *before* each request.
+- Chunks are sized with `chunking.tokenizer` (bge) whatever the embedder, so every embedder sees identical chunks.
+
+**Free-tier mechanics**
+- Client-side limits: requests spaced `60/rpm` s apart, a 60 s token window for `tpm`, `rpd` (UTC day) and `rpmonth` caps
+  persisted in `indexes/usage/<provider>.json`, checked before sending. Token counts are estimated (len / 3.5, deliberately high).
+- `post_json`: 429 with "per day / per month / insufficient_quota" wording → `QuotaExhaustedError` (stop, don't hammer);
+  other 429 → wait `Retry-After` or 2, 4, 8 … ≤ 60 s; 5xx/timeouts → backoff; 401/403 → error naming the key variable.
+- Vectors are cached per batch (`preferred_batch` = 4 requests' worth), **query vectors too**: an interrupted or
+  quota-stopped run resumes where it stopped, and re-running an evaluation sends zero requests.
+- `--limit-questions N` indexes only the filings of the first N questions (index names get `__qN`): 30 questions →
+  18 filings, 5,325 chunks (17% of the corpus). Every embedder sees the same subset.
+
+**Identity and names:** local vectors keep the model name (`BAAI/bge-small-en-v1.5`), online ones
+`provider/model@dims[#hash of document template/params]` (cache keys + manifest); the slug (`gemini-gemini-embedding-001-768`)
+names the collection and the cache file. `bge-small-noinstr` has the same document vectors as `bge-small`, so it reuses the
+index and measures only the query instruction.
+
+**Done when**
+- [x] Every preset in the catalog validates; `finsight embedders` shows key status and estimates (offline)
+- [x] Each wire format's request/response is tested against a mock transport (URL, headers, body, ordering, batching, roles,
+  templates, dims, normalization, query cache, budget, dimension mismatch); guards for missing keys and paid providers tested
+- [x] The comparison runs end to end with fakes in CI, and for real with local models: see `docs/evaluation.md` (P4b)
+
+**Not verified live:** the online adapters were built from the vendors' API docs (checked 2026-11-24) and tested offline;
+no key was available in this session. Run `make compare-embedders E=bge-small,gemini-001 Q=30` once a key is in `.env`,
+and record anything that differs in §7.
+
+**Plan for P5/P6 (same pattern):** `configs/rerankers.yaml` (local bge-reranker, Cohere trial, Jina, Voyage) and
+`configs/llms.yaml` (Ollama, Claude, Gemini free tier, Mistral free tier, Groq free tier), each provider through
+`providers/ratelimit.py` + `providers/http.py`, with the same key lookup, paid guard and response cache.
 
 **References:** [Sentence-BERT (arXiv 1908.10084)](https://arxiv.org/abs/1908.10084) · [BGE / C-Pack (arXiv 2309.07597)](https://arxiv.org/abs/2309.07597) · [bge-small-en-v1.5 model card](https://huggingface.co/BAAI/bge-small-en-v1.5) · [MTEB leaderboard](https://huggingface.co/spaces/mteb/leaderboard) · [HNSW (arXiv 1603.09320)](https://arxiv.org/abs/1603.09320) · [Qdrant docs](https://qdrant.tech/documentation/) · [Qdrant filtering](https://qdrant.tech/documentation/concepts/filtering/) · [bm25s](https://github.com/xhluca/bm25s)
 
@@ -1083,7 +1144,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P1 Data | ✅ done | 2026-11-23 | 150 Q · 189 evidence items · 84 PDFs (166.5 MB, **12,013 pages**) · 32 companies · download 23 s, re-run 0.1 s · 0 consistency problems · 43 unit tests |
 | P2 Ingestion | ✅ done | 2026-11-24 | 12,013 pages (69 empty, 5,098 with tables, 40.4M chars) · **evidence on gold page 189/189 (100%)**, mean overlap 0.998, 0 offsets · label–number adjacency **0.28 → 0.97** vs plain extraction (160 numeric evidence pages) · 70 s sequential / 17 s on 6 processes · 96 header/footer patterns · 75 tests |
 | P3 Chunking | ✅ done | 2026-11-24 | 4 strategies × 3 sizes swept · page_aware_384: 31,114 chunks, 0% cross pages, 72% of evidence in one chunk · fixed/recursive cross pages 30–60% · evidence-in-one-chunk 44–48% @256 → 68–72% @384 → 80–87% @480 · table chunks with their column header 64% → 94% (carry) · 0 chunks over the 510-token limit · ~10 s per strategy · 99 tests |
-| P4 Indexing | ⬜ | | index time: · size: |
+| P4 Indexing | ✅ done | 2026-11-24 | 31,114 page-aware chunks indexed in **5 min 6 s** on M5 (bge-small on MPS, **106 chunks/s**) · Qdrant 244 MB (embedded), BM25 25 MB (27,097 words), cache 66 MB · re-run 0.07 s · 3M capex gold page: dense rank 36 (no instruction) / 47 (with), BM25 121 → the vocabulary gap P5 must close · **online embedders** (Gemini, Mistral, Cohere, Jina, Voyage, Ollama; OpenAI paid-blocked) via presets + rate limits · dense-only baseline (150 Q): hit@10 0.46, MRR 0.23, doc_hit@10 0.89 · q30: bge-base 0.50 vs bge-small 0.43 hit@10 · 139 tests (137 fast + 2 slow) |
 | P5 Retrieval | ⬜ | | best config: · Recall@10: |
 | P6 Generation | ⬜ | | |
 | P7 Advanced | ⬜ | | |
@@ -1102,6 +1163,18 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-24 | P4 | **Online embedders added** (user request): presets in `configs/embedders.yaml`, 3 wire formats over plain httpx (no vendor SDKs), shared `providers/` (rate limiter, usage store, retrying `post_json`) for P5/P6 too | Compare local vs hosted models with zero spend; one retry/limit path for every provider; nothing extra to install |
+| 2026-11-24 | P4 | **Contract change:** `EmbeddingCfg` = preset + provider/model/dimensions/templates/params/rate_limit/allow_paid/max_tokens_per_run; `query_instruction` replaced by `query_template`; `Embedder` gains `slug`, `provider`, `embed_queries`, `preferred_batch`; `Secrets` gains gemini/openai/mistral/jina/voyage keys; new `chunking.tokenizer` | Templates cover bge, Gemini 2, nomic uniformly; chunk sizes must not depend on the embedder; bge identities unchanged so the built index and cache stay valid |
+| 2026-11-24 | P4 | Paid-only providers refused unless `allow_paid: true`; `max_tokens_per_run` checked before every request | The user runs free tiers only: a typo in .env must never spend money |
+| 2026-11-24 | P4 | Free-tier limits in presets are conservative defaults, not vendor facts | Vendor docs and third-party pages disagree and limits differ per account; the dashboard is the truth, the preset is overridable |
+| 2026-11-24 | P4 | Only explicit per-day/per-month wording makes a 429 a hard stop | Google's per-MINUTE 429 also says "exceeded your current quota … billing"; stopping on it would abort runs that only need to wait |
+| 2026-11-24 | P4 | Query vectors cached in the embedder's SQLite file; `--limit-questions N` subset indexes (`__qN`) | Re-running an eval costs 0 requests; a 30-question subset (5,325 chunks) makes rate-limited APIs finish in minutes |
+| 2026-11-24 | P4 | `retrieval_metrics.py` built in P4 instead of P5 | The embedder comparison needs it; P5 reuses it unchanged |
+| 2026-11-24 | P4 | BM25 filters via bm25s `weight_mask` (pre-ranking) instead of "retrieve k×4, then drop" | Exact, and returns k matches whenever k exist; post-filtering can return fewer than k for a small company |
+| 2026-11-24 | P4 | Payload indexes created only on a Qdrant **server**; embedded mode warnings (> 20k points, payload indexes) silenced and logged once | Embedded mode ignores payload indexes and searches by brute force (~31k points is fine). Production uses a server (P10) |
+| 2026-11-24 | P4 | Manifest rebuild keys = chunk content hash + embed model + `INDEX_VERSION` (+ index completeness); fingerprint stored only | Changing the LLM or top_k changes the fingerprint but must not re-embed 31k chunks |
+| 2026-11-24 | P4 | Collection and BM25 names include the chunking config (`page_aware_384`), so all configs coexist | P5 compares chunkers on retrieval metrics without rebuilding |
+| 2026-11-24 | P4 | The sanity script also reports the **gold-page rank** for FinanceBench's 3M capex question; the slow test checks findability with the filing's wording | The question says "capital expenditure", the filing "Purchases of property, plant and equipment": dense rank 36–47, BM25 121. Retrieval quality is a P5 metric, not a P4 assertion |
 | 2026-11-24 | P3 | **Contract change:** `chunk_tokens`/`child_tokens` capped at **510** (`MAX_EMBED_TOKENS`), not 512; new `chunking.carry_table_header` | bge's 512 includes `[CLS]`/`[SEP]`. Carrying the column header raised table chunks that contain it from 64% to 94% |
 | 2026-11-24 | P3 | Token counts via one tokenization per document + binary search over token offsets (`DocText`) | Exact sizes with the model's tokenizer at ~10 s per corpus pass, instead of re-tokenizing every candidate piece |
 | 2026-11-24 | P3 | Default stays `page_aware` 384; **final chunk choice deferred to P5** | "Evidence in one chunk" favours big chunks by construction (fixed_480 scores highest but 60% of its chunks span two pages); retrieval metrics must decide |
@@ -1141,11 +1214,16 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 | New source folder missing from `git status` | A `.gitignore` pattern matches its name | `git check-ignore -v <path>` shows which rule; anchor the rule with a leading `/` |
 | VS Code says packages are "not installed" | The editor is using the parent `venv` interpreter | Cmd+Shift+P → "Python: Select Interpreter" → `finsight-rag/.venv/bin/python` |
 | Embedding runs on CPU | MPS not detected | Check `torch.backends.mps.is_available()`; update macOS or torch |
-| `RuntimeError: Storage folder ... is already accessed by another instance of Qdrant client` | Embedded Qdrant lock | Stop the other process, or run Qdrant in Docker and set `QDRANT_URL` |
+| `RuntimeError: Storage folder ... is already accessed by another instance of Qdrant client` | Embedded Qdrant lock (a notebook or the API still has it open) | Run the last cell (`c.close()`) or restart that kernel; or run Qdrant in Docker and set `QDRANT_URL` |
+| `make index` re-embeds everything after re-chunking | Chunk text changed (expected); only new texts miss the cache | Check `cache_hits` in the IndexReport; delete `indexes/embed_cache/` only to reclaim space |
 | Answers ignore most of the context | Ollama `num_ctx` too small | Set `options.num_ctx` (8192) in `ollama.py` |
 | Anthropic 400 "temperature ..." | A sampling parameter was sent | Remove `temperature`, `top_p` and `top_k` |
 | `ConnectError` to Ollama | The server isn't running | `ollama serve`, or open the Ollama app |
 | Evidence-page check is low | Page offset or parsing issue | Check the 0-based convention; inspect the worst 5 in `03_parse_pdfs.py` |
+| `MissingAPIKeyError: Embedder 'gemini-001' needs GEMINI_API_KEY` | Online preset selected, key not in `.env` | Add the key (free link in the message), or `EMBEDDER=bge-small` |
+| `PaidProviderBlockedError` | An OpenAI preset with `allow_paid: false` | Intended: pick a free preset. Only set `FINSIGHT__EMBEDDING__ALLOW_PAID=true` if you mean to pay |
+| `QuotaExhaustedError: daily request cap reached` | The preset's `rpd`/`rpmonth` (or the provider's) is used up | Re-run after the reset (UTC day): cached vectors are not re-sent. Or use `--limit-questions 30` |
+| Repeated "provider request failed, retrying" (429) | Client limits above your account's real limits | Lower `rate_limit.rpm`/`tpm` for that preset (`FINSIGHT__EMBEDDING__RATE_LIMIT__RPM=10`) |
 | Swap or memory pressure during indexing | Too much in RAM | Lower `embedding.batch_size`, close apps, index one strategy at a time |
 
 ---

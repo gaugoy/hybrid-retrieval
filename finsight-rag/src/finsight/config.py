@@ -48,6 +48,9 @@ ENV_ALIASES: dict[str, str] = {
     "ANTHROPIC_MODEL": "llm.anthropic_model",
     "JUDGE_PROVIDER": "judge.provider",
     "QDRANT_URL": "vector_store.qdrant_url",
+    "EMBEDDER": "embedding.preset",  # a preset name from configs/embedders.yaml
+    "EMBEDDING_PROVIDER": "embedding.provider",
+    "EMBEDDING_MODEL": "embedding.model",
     "LOG_LEVEL": "logging.level",
 }
 
@@ -128,6 +131,9 @@ class ChunkingCfg(_Strict):
         True  # repeat a table's column-header row (the years) in later chunks
     )
     contextual_headers: bool = False  # P7: prepend "company | doc | page" to embed_text
+    # Chunk sizes are counted with THIS tokenizer, whatever the embedder, so every embedder
+    # (local or online) is compared on identical chunks.
+    tokenizer: str = "BAAI/bge-small-en-v1.5"
 
     @model_validator(mode="after")
     def _overlap_smaller_than_chunk(self) -> ChunkingCfg:
@@ -136,11 +142,58 @@ class ChunkingCfg(_Strict):
         return self
 
 
+EmbeddingProvider = Literal[
+    "local", "fake", "gemini", "openai", "mistral", "jina", "voyage", "cohere", "ollama"
+]
+
+
+class RateLimitCfg(_Strict):
+    """Client-side limits for an online provider. Set them at or below your account's limits.
+
+    rpm / tpm      requests and (estimated) tokens per minute: requests are spaced 60/rpm apart
+    rpd / rpmonth  requests per day (UTC) / per calendar month, persisted in indexes/usage/
+    max_batch_*    how many texts / estimated tokens go into one request
+    """
+
+    rpm: int | None = Field(None, gt=0)
+    tpm: int | None = Field(None, gt=0)
+    rpd: int | None = Field(None, gt=0)
+    rpmonth: int | None = Field(None, gt=0)
+    max_batch_texts: int = Field(32, gt=0)
+    max_batch_tokens: int | None = Field(None, gt=0)
+    max_retries: int = Field(6, ge=0)
+    timeout_s: float = Field(60.0, gt=0)
+
+
 class EmbeddingCfg(_Strict):
+    """Which embedder to use, usually from a PRESET (configs/embedders.yaml): EMBEDDER=gemini-001.
+
+    Values written explicitly (YAML, FINSIGHT__EMBEDDING__*, overrides) win over the preset's.
+    """
+
+    preset: str | None = "bge-small"
+    provider: EmbeddingProvider = "local"
     model: str = "BAAI/bge-small-en-v1.5"
+    dimensions: int | None = Field(None, gt=0)  # output size (MRL truncation where supported)
+    query_template: str = "{text}"  # e.g. bge: "Represent this sentence ...: {text}"
+    document_template: str = "{text}"  # e.g. gemini-embedding-2: "title: none | text: {text}"
+    query_params: dict[str, Any] = Field(default_factory=dict)  # extra request fields, queries
+    document_params: dict[str, Any] = Field(default_factory=dict)  # ... and documents
+    base_url: str | None = None  # override the provider's default endpoint
+    rate_limit: RateLimitCfg = Field(default_factory=RateLimitCfg)
+    allow_paid: bool = False  # refuse paid-only providers (OpenAI) unless set to true
+    max_tokens_per_run: int | None = Field(None, gt=0)  # stop before sending more than this
+    notes: str = ""  # free-tier facts from the catalog, shown by `finsight embedders`
+    # local (sentence-transformers) only
     device: Literal["auto", "mps", "cuda", "cpu"] = "auto"
     batch_size: int = Field(64, gt=0)
-    query_instruction: str = "Represent this sentence for searching relevant passages: "
+
+    @model_validator(mode="after")
+    def _templates_have_placeholder(self) -> EmbeddingCfg:
+        for name in ("query_template", "document_template"):
+            if "{text}" not in getattr(self, name):
+                raise ValueError(f"embedding.{name} must contain '{{text}}'")
+        return self
 
 
 class VectorStoreCfg(_Strict):
@@ -202,22 +255,44 @@ class LoggingCfg(_Strict):
     json_format: bool = False
 
 
+# Provider -> environment variable(s) holding its API key (first one set wins).
+API_KEY_ENV: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "cohere": ("COHERE_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "openai": ("OPENAI_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+    "jina": ("JINA_API_KEY",),
+    "voyage": ("VOYAGE_API_KEY",),
+}
+
+
 class Secrets(BaseModel):
     """API keys. SecretStr hides them in repr/logs; call ``.get_secret_value()`` to use one."""
 
     anthropic_api_key: SecretStr | None = None
     cohere_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    mistral_api_key: SecretStr | None = None
+    jina_api_key: SecretStr | None = None
+    voyage_api_key: SecretStr | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Secrets:
-        def pick(name: str) -> SecretStr | None:
-            value = (env.get(name) or "").strip()
-            return SecretStr(value) if value else None
+        def pick(*names: str) -> SecretStr | None:
+            for name in names:
+                value = (env.get(name) or "").strip()
+                if value:
+                    return SecretStr(value)
+            return None
 
-        return cls(
-            anthropic_api_key=pick("ANTHROPIC_API_KEY"),
-            cohere_api_key=pick("COHERE_API_KEY"),
-        )
+        return cls(**{f"{p}_api_key": pick(*names) for p, names in API_KEY_ENV.items()})
+
+    def for_provider(self, provider: str) -> SecretStr | None:
+        """The key for a provider ('gemini', 'openai', ...), or None (local providers: always)."""
+        value: SecretStr | None = getattr(self, f"{provider}_api_key", None)
+        return value
 
 
 class Settings(_Strict):
@@ -332,6 +407,34 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+EMBEDDERS_FILE = "configs/embedders.yaml"
+
+
+def load_embedder_presets(root: Path) -> dict[str, dict[str, Any]]:
+    path = root / EMBEDDERS_FILE
+    data = _read_yaml(path) if path.is_file() else {}
+    return {name: dict(cfg or {}) for name, cfg in data.items()}
+
+
+def resolve_embedding_preset(root: Path, embedding: dict[str, Any]) -> dict[str, Any]:
+    """Expand ``embedding.preset`` from configs/embedders.yaml; keys set anywhere else win.
+
+    base.yaml holds only the preset name and generic knobs (device, batch_size, allow_paid, ...),
+    so any model-specific key present here was set on purpose (profile, env, overrides) and is
+    applied on top of the preset, e.g. EMBEDDER=gemini-001 + FINSIGHT__EMBEDDING__DIMENSIONS=1536.
+    """
+    name = embedding.get("preset")
+    if not name:
+        return embedding
+    presets = load_embedder_presets(root)
+    if name not in presets:
+        raise ConfigError(
+            f"Unknown embedding preset {name!r}. Available: {', '.join(sorted(presets))} "
+            f"(see {EMBEDDERS_FILE}, or run: uv run finsight embedders)"
+        )
+    return deep_merge(presets[name], embedding)
+
+
 def load_settings(
     config: str | Path | None = None,
     overrides: Mapping[str, Any] | None = None,
@@ -365,6 +468,7 @@ def load_settings(
     merged = deep_merge(merged, env_overrides(env))
     if overrides:
         merged = deep_merge(merged, overrides)
+    merged["embedding"] = resolve_embedding_preset(root, merged.get("embedding") or {})
 
     try:
         settings = Settings.model_validate(merged)
