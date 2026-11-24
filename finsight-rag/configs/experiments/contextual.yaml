@@ -1,0 +1,12 @@
+# P7: contextual chunk headers ("company | doc FYyyyy | page p" prepended to the EMBEDDED text only).
+# Needs the _ctx index first:  FINSIGHT__CHUNKING__CONTEXTUAL_HEADERS=true uv run finsight index --only dense
+name: contextual_headers
+dataset: financebench
+k: [1, 5, 10, 20]
+variants:
+  - {name: dense+filter+year, retrieval: {mode: dense}}
+  - {name: dense (no filter), retrieval: {mode: dense, use_metadata_filter: false}}
+sweep:
+  chunking:
+    - {strategy: recursive, chunk_tokens: 384}
+    - {strategy: recursive, chunk_tokens: 384, contextual_headers: true}

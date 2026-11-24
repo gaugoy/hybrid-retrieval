@@ -192,24 +192,16 @@ class RemoteEmbedder(Embedder):
         return self.embed_queries([text])[0]
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
-        from finsight.embedding.cache import cache_key
+        from finsight.embedding.cache import cached_query_vectors
 
         tpl = self.cfg.query_template
         formatted = [tpl.format(text=t) for t in texts]
         ident = f"{self.model_name}|query|{_short_hash([tpl, self.cfg.query_params])}"
-        keys = [cache_key(ident, t) for t in formatted]
-        found = self.query_cache.get_many(keys) if self.query_cache is not None else {}
-        self.stats.query_cache_hits += sum(k in found for k in keys)
-        todo = [i for i, k in enumerate(keys) if k not in found]
-        if todo:
-            vecs = self._embed([formatted[i] for i in todo], "query")
-            new = {keys[i]: v for i, v in zip(todo, vecs, strict=True)}
-            found.update(new)
-            if self.query_cache is not None:
-                self.query_cache.put_many(new)
-        if not keys:
-            return np.zeros((0, self.dim), dtype=np.float32)
-        return np.stack([found[k] for k in keys]).astype(np.float32)
+        vecs, hits = cached_query_vectors(
+            self.query_cache, ident, formatted, lambda f: self._embed(f, "query"), self.dim
+        )
+        self.stats.query_cache_hits += hits
+        return vecs
 
     # ------------------------------------------------------------------ batching + limits
     def _batches(self, texts: list[str]) -> list[list[str]]:

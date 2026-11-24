@@ -27,7 +27,7 @@ import pandas as pd
 
 from finsight.config import load_settings
 from finsight.container import Container
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.notebook import Param, configure_pandas, preview, script_args, show, step
 from finsight.observability.logging import configure_logging
 from finsight.schemas import RetrievedChunk
@@ -48,7 +48,7 @@ P
 # %%
 settings = load_settings(P.config)
 configure_logging(settings.logging.level, settings.logging.json_format)
-records = {r.qid: r for r in fb.load_eval_records(settings)} if P.qid else {}
+records = {r.qid: r for r in ds.eval_records(settings)} if P.qid else {}
 rec = records.get(P.qid)
 question = P.question or (rec.question if rec else "What is 3M's FY2018 capital expenditure?")
 gold = {(e.doc_name, e.page_idx) for e in rec.evidence} if rec and not P.question else set()

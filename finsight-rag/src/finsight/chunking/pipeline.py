@@ -36,7 +36,7 @@ from finsight.chunking.parent_child import ParentChildChunker
 from finsight.chunking.registry import build_chunker
 from finsight.chunking.tokenizer import Tokenizer, get_tokenizer
 from finsight.config import MAX_EMBED_TOKENS, Settings
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.errors import DataNotFoundError
 from finsight.ingestion import pipeline as ingest
 from finsight.ingestion.quality import evidence_overlap
@@ -136,8 +136,8 @@ def chunk_corpus(
         report.elapsed_s = round(time.perf_counter() - start, 2)
         return report
 
-    pages_df = pages_df if pages_df is not None else ingest.load_pages_df(settings)
-    meta = fb.load_document_meta(settings)
+    pages_df = pages_df if pages_df is not None else ds.pages_df(settings)
+    meta = ds.document_meta(settings)
     chunker = make_chunker(settings, tokenizer)
     chunks: list[Chunk] = []
     parents: list[Chunk] = []
@@ -212,7 +212,7 @@ def evidence_coverage(settings: Settings, chunks_df: pd.DataFrame) -> pd.DataFra
         for p in range(row.page_start, row.page_end + 1):
             by_page.setdefault((row.doc_name, p), []).append(row.text)
     rows = []
-    for rec in fb.load_eval_records(settings):
+    for rec in ds.eval_records(settings):
         for ev in rec.evidence:
             texts = by_page.get((ev.doc_name, ev.page_idx), [])
             rows.append(
@@ -273,7 +273,7 @@ def run_sweep(
     from finsight.config import load_settings
 
     tokenizer = tokenizer or get_tokenizer(settings.chunking.tokenizer)
-    pages_df = ingest.load_pages_df(settings)
+    pages_df = ds.pages_df(settings)
     rows = []
     for overrides in configs or DEFAULT_SWEEP:
         s = load_settings(settings.config_path, {"chunking": overrides}, root=settings.root)

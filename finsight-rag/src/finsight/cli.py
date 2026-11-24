@@ -61,13 +61,22 @@ def download(
     config: Path | None = ConfigOpt,
     limit_docs: int | None = typer.Option(None, help="Only the first N PDFs (trial run)"),
     force: bool = typer.Option(False, help="Re-download even if files exist"),
+    dataset: str = typer.Option("financebench", help="financebench | multihop (P7)"),
 ) -> None:
-    """Download FinanceBench (Q&A, doc metadata, referenced PDFs). [P1]"""
+    """Download FinanceBench (Q&A, metadata, PDFs) or MultiHop-RAG. [P1/P7]"""
     from finsight.data.download import download_financebench
     from finsight.observability.logging import configure_logging
 
     settings = load_settings(config)
     configure_logging(settings.logging.level, settings.logging.json_format)
+    if dataset == "multihop":
+        from finsight.data import multihop
+
+        paths = multihop.download(settings, force=force)
+        console.print(
+            "multihop: " + ", ".join(f"{p.name} {p.stat().st_size / 1e6:.1f}MB" for p in paths)
+        )
+        return
     report = download_financebench(settings, limit_docs=limit_docs, force=force)
     console.print(
         f"questions={report.n_questions} docs={report.n_docs_needed} "
@@ -379,6 +388,26 @@ def eval_cmd(
     configure_logging(settings.logging.level, settings.logging.json_format)
     exp_path = experiment if experiment.is_absolute() else settings.root / experiment
     out = run_retrieval_eval(settings, load_experiment(exp_path), limit=limit)
+    console.print((out / "report.md").read_text())
+    console.print(f"report: {out}")
+
+
+@app.command()
+def sample(
+    config: Path | None = ConfigOpt,
+    pipelines: str = typer.Option("hybrid_rerank,agentic", help="Comma-separated pipeline names"),
+    n: int = typer.Option(50, help="Questions in the sample"),
+    null_share: float = typer.Option(0.2, help="Share of unanswerable questions (MultiHop-RAG)"),
+    seed: int = typer.Option(7, help="Sampling seed"),
+) -> None:
+    """End-to-end pipeline comparison on a seeded question sample; report in results/. [P7]"""
+    from finsight.evaluation.pipeline_sample import run_pipeline_sample
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    names = [p.strip() for p in pipelines.split(",") if p.strip()]
+    out = run_pipeline_sample(settings, names, n=n, null_share=null_share, seed=seed)
     console.print((out / "report.md").read_text())
     console.print(f"report: {out}")
 

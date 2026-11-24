@@ -1,0 +1,13 @@
+# P7: query transformations vs the P5 baseline (same retrieval: recursive_384 + dense + company/year filter).
+# Each transform calls the generator LLM (llm.preset) once per question before retrieval.
+name: advanced_query_transforms
+dataset: financebench
+k: [1, 5, 10, 20]
+variants:
+  - {name: baseline,    retrieval: {query_transform: none}}
+  - {name: multi_query, retrieval: {query_transform: multi_query}}
+  - {name: hyde,        retrieval: {query_transform: hyde}}
+  - {name: decompose,   retrieval: {query_transform: decompose}}
+sweep:
+  chunking:
+    - {strategy: recursive, chunk_tokens: 384}

@@ -379,8 +379,10 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
    → A technique Anthropic published: before indexing, add a short, document-aware context to each chunk, for both the embeddings and BM25. My cheap version (a metadata header) gave 📌; the LLM-written version costs one LLM call per chunk at ingest time.
 4. *"How do you keep advanced techniques from blowing up latency and cost?"*
    → Route by query type (a classifier or rules), run the extra steps only when the first pass is weak (the CRAG idea), cache LLM outputs, use small models for the helper steps, and stream the final answer.
+5. *"Re-running your evaluation was slow and gave different numbers each time. What was wrong?"*
+   → Two things, both now fixed. (1) Query embeddings and cross-encoder rerank scores were recomputed every run — ~19 s per question — and on Apple's GPU (MPS) the float results wobble slightly, so the ranking order changed between runs. I cache both on disk keyed by (model, text) and (model, query, chunk); a replay is ~0.1 s and byte-identical. (2) Document vectors were never the problem — the index manifest already skips re-embedding when the chunk content, model and index version are unchanged. Lesson: make retrieval deterministic by caching, and measure before blaming the expensive-looking step.
 
-**📌 Your numbers:** a row per technique (Δ recall, Δ correctness, extra latency, LLM calls)
+**📌 Your numbers (P7):** contextual chunk headers on 150 Q (dense + company/year filter): hit@10 **0.613 → 0.673**, recall@10 0.580 → 0.629, nDCG@10 0.385 → 0.400, MRR flat (0.353 → 0.350). Without a filter: 0.467 → 0.567. The header partly replaces the metadata filter. Query transforms (multi_query / HyDE / decompose): `make eval-advanced`, not yet measured (needs 1–4 local-LLM calls per question). MultiHop-RAG agentic vs baseline: `make multihop`.
 
 **Go deeper:** [HyDE](https://arxiv.org/abs/2212.10496) · [RAG-Fusion](https://arxiv.org/abs/2402.03367) · [Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) · [CRAG](https://arxiv.org/abs/2401.15884) · [Self-RAG](https://arxiv.org/abs/2310.11511) · [ReAct](https://arxiv.org/abs/2210.03629) · [GraphRAG](https://arxiv.org/abs/2404.16130)
 

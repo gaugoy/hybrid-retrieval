@@ -26,7 +26,7 @@ from qdrant_client import QdrantClient
 
 from finsight.chunking import pipeline as cp
 from finsight.config import Settings
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.embedding.base import Embedder, build_embedder, embedder_slug
 from finsight.embedding.cache import EmbeddingCache, embed_with_cache
 from finsight.indexing.bm25_store import CHUNK_IDS_FILE, BM25Index
@@ -88,7 +88,7 @@ def make_embedder(settings: Settings) -> Embedder:
 
 def subset_for_questions(settings: Settings, n_questions: int) -> tuple[list[str], str]:
     """Doc names needed by the first n questions, and the tag for their subset index."""
-    records = fb.load_eval_records(settings)[:n_questions]
+    records = ds.eval_records(settings)[:n_questions]
     docs = sorted({ev.doc_name for r in records for ev in r.evidence})
     return docs, f"q{n_questions}"
 

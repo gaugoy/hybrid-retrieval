@@ -121,15 +121,19 @@ class Container:
 
         s = self.settings
         return build_reranker(
-            s.rerank, secrets=s.secrets, device=s.embedding.device, usage_dir=usage_dir(s)
+            s.rerank,
+            secrets=s.secrets,
+            device=s.embedding.device,
+            usage_dir=usage_dir(s),
+            cache_dir=s.paths.embed_cache_dir,
         )
 
     @cached_property
     def filter_extractor(self) -> FilterExtractor:
-        from finsight.data import financebench as fb
+        from finsight.data import datasets as ds
         from finsight.retrieval.filters import FilterExtractor
 
-        companies = {m.company for m in fb.load_document_meta(self.settings).values()}
+        companies = {m.company for m in ds.document_meta(self.settings).values()}
         return FilterExtractor(companies)
 
     @cached_property

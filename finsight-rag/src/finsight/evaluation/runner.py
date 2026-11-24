@@ -25,9 +25,10 @@ from tqdm import tqdm
 from finsight.chunking import pipeline as cp
 from finsight.config import Settings, deep_merge, load_settings
 from finsight.container import Container
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.evaluation.retrieval_metrics import score_question
 from finsight.retrieval.base import Reranker
+from finsight.retrieval.query_transform import transformed_retrieve
 from finsight.retrieval.reranker import NoopReranker
 from finsight.retrieval.service import RetrievalService
 
@@ -56,10 +57,11 @@ def run_retrieval_eval(
     out_dir: Path | None = None,
 ) -> Path:
     ks = tuple(experiment.get("k", [1, 5, 10, 20]))
-    records = fb.load_eval_records(settings)[: limit or None]
+    records = ds.eval_records(settings)[: limit or None]
     chunkings = experiment.get("sweep", {}).get("chunking") or [settings.chunking.model_dump()]
     rows: list[dict[str, Any]] = []
     rerankers: dict[str, Reranker] = {}
+    llm = None  # built once, only if a variant uses a query transform (P7)
 
     for chunking in chunkings:
         s_chunk = _with(settings, {"chunking": chunking})
@@ -81,9 +83,24 @@ def run_retrieval_eval(
                     extractor=c.filter_extractor,
                 )
                 label = f"{cp.config_name(s_chunk)} · {variant['name']}"
+                technique = s_var.retrieval.query_transform
+                if technique != "none" and llm is None:
+                    llm = c.llm
                 for rec in tqdm(records, desc=label, unit="q", disable=not progress):
                     t0 = time.perf_counter()
-                    res = service.retrieve(rec.question, top_k=max(ks))
+                    calls = 0
+                    if technique == "none":
+                        res = service.retrieve(rec.question, top_k=max(ks))
+                    else:
+                        assert llm is not None
+                        res, trace = transformed_retrieve(
+                            service,
+                            llm,
+                            rec.question,
+                            technique,
+                            top_k=max(ks),
+                        )
+                        calls = trace.llm_calls
                     total = (time.perf_counter() - t0) * 1000
                     ranked = [
                         (r.chunk.doc_name, r.chunk.page_start, r.chunk.page_end) for r in res.final
@@ -102,6 +119,8 @@ def run_retrieval_eval(
                             "top3": [f"{d} p{p + 1}" for d, p, _ in ranked[:3]],
                             "gold": [f"{d} p{p + 1}" for d, p in sorted(set(gold))],
                             "latency_ms": round(total, 1),
+                            "llm_calls": calls,
+                            "top_score": round(res.final[0].score, 4) if res.final else None,
                             **{f"t_{k}": v for k, v in res.timings_ms.items()},
                             **score_question(ranked, gold, ks),
                         }

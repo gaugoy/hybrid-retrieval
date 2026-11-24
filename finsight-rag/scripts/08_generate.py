@@ -27,7 +27,7 @@ import pandas as pd
 
 from finsight.config import load_settings
 from finsight.container import Container
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.notebook import Param, configure_pandas, preview, script_args, show, step
 from finsight.observability.logging import configure_logging
 
@@ -53,7 +53,7 @@ if P.pipeline:
     overrides["pipeline"] = P.pipeline
 settings = load_settings(P.config, overrides or None)
 configure_logging(settings.logging.level, settings.logging.json_format)
-rec = {r.qid: r for r in fb.load_eval_records(settings)}.get(P.qid) if P.qid else None
+rec = {r.qid: r for r in ds.eval_records(settings)}.get(P.qid) if P.qid else None
 question = P.question or (rec.question if rec else "What is 3M's FY2018 capital expenditure?")
 c = Container(settings)
 pipe = c.pipeline

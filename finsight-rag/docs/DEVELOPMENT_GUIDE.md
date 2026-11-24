@@ -237,7 +237,7 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 
 ### 3.6 Makefile targets
 
-`make help` lists the real targets; the Makefile is the source of truth. As of P6:
+`make help` lists the real targets; the Makefile is the source of truth. As of P7:
 
 | Target | Runs | Phase |
 |---|---|---|
@@ -252,6 +252,8 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 | `make embedders` / `make compare-embedders E=a,b Q=30` | the preset catalog (keys, cost, time) · dense-retrieval comparison, report in `results/` | P4 |
 | `make eval-retrieval` | `finsight eval`: the retrieval ablation (all chunkers × variants, 150 Q), report in `results/` | P5 |
 | `uv run finsight query "..."` / `uv run finsight llms` | a cited answer · the LLM presets and what auto picks | P6 |
+| `make eval-advanced` / `make multihop` | query-transform + contextual experiments · download+index+evaluate MultiHop-RAG | P7 |
+| `uv run finsight sample` | pipelines (baseline vs corrective vs agentic) on a seeded question sample | P7 |
 | `make eval`, `make serve`, `make ui` | placeholders until P8, P9 | later |
 
 Learning scripts (`scripts/NN_*.py`) run single-process and print everything; `make` targets call the concise
@@ -929,46 +931,39 @@ abstaining: prompts for small models are brittle, so citation repair is determin
 
 ### P7 — Advanced RAG techniques
 
-**Goal:** each advanced technique as a pluggable component, measured against the P5/P6 baseline.
+**Goal:** each advanced technique as a pluggable component, measured against the P5/P6 baseline; plus a second dataset (MultiHop-RAG) that needs cross-document reasoning and abstention on unanswerable questions.
 **Concepts:** query rewriting, multi-query, HyDE, decomposition, contextual retrieval, corrective RAG, agentic RAG. See Interview Guide §P7.
 
-**Files**
+**Files (as built)**
 ```
-src/finsight/retrieval/query_transform.py   # MultiQuery, HyDE, Decompose (registry "query_transform")
-src/finsight/chunking/contextual.py          # header-only and LLM-summary variants
-src/finsight/generation/prompts/multi_query.md  hyde.md  decompose.md  grade.md  rewrite.md  agent_system.md
-src/finsight/pipelines/corrective.py         # CorrectiveRAGPipeline
-src/finsight/pipelines/agentic.py            # AgenticRAGPipeline (tool loop)
-src/finsight/data/multihop.py                # load MultiHop-RAG -> DocumentMeta/Page/EvalRecord
-configs/experiments/advanced.yaml
+src/finsight/retrieval/query_transform.py    # multi_query, hyde, decompose (used by hybrid_rerank via retrieval.query_transform)
+src/finsight/generation/jsonout.py            # ask_json: LLM -> pydantic, extract first {...}, retry once, else None (fallback)
+src/finsight/generation/prompts/{multi_query,hyde,decompose,grade,rewrite,agent_system,agent_json}.md
+src/finsight/pipelines/corrective.py          # CorrectiveRAGPipeline: grade -> rewrite+retry -> abstain
+src/finsight/pipelines/agentic.py             # AgenticRAGPipeline: search/read/answer tools (Claude native; JSON protocol elsewhere)
+src/finsight/data/multihop.py                 # MultiHop-RAG loader (corpus.json + MultiHopRAG.json)
+src/finsight/data/datasets.py                 # dispatch: document_meta / pages_df / eval_records by settings.dataset
+src/finsight/evaluation/pipeline_sample.py    # run_pipeline_sample: pipelines on a seeded, null-stratified sample
+configs/multihop.yaml  configs/experiments/{advanced,contextual}.yaml
 scripts/09_advanced_rag.py
-tests/unit/test_query_transform.py  test_corrective_flow.py  (FakeLLM)
+tests/integration/test_advanced_rag.py  test_pipeline_sample.py  tests/unit/test_multihop_loader.py
 ```
+CLI: `finsight download --dataset multihop`, `finsight sample --pipelines a,b --n 50`; `make eval-advanced`, `make multihop`.
+Config: `retrieval.query_transform` (none|multi_query|hyde|decompose), `crag` (min_score, llm_grader), `agent.max_steps`.
 
-**Implementation notes**
-- **MultiQuery:** the LLM writes 3 paraphrases (as a JSON list). Retrieve each (the original included) with hybrid search, then RRF-fuse all the lists.
-- **HyDE:** the LLM writes a short hypothetical filing excerpt that would answer the question. Embed **that** text for the dense side; keep the original question for BM25.
-- **Decompose:** the LLM splits a comparison or multi-year question into ≤ 3 sub-questions. Retrieve for each and take the union, reranked against the original question.
-- **Contextual headers (cheap version):** `embed_text = f"{company} | {doc_type} FY{doc_period} | page {page_idx+1}\n{text}"`. This needs a re-index (the manifest detects the change). **LLM version (optional):** a local LLM writes a one-sentence situating context per chunk, cached on disk. It is slow for ~tens of thousands of chunks, so try it on a subset of docs first and report the cost.
-- **CorrectiveRAGPipeline:**
-  1. retrieve and rerank
-  2. grade: if the top rerank score is below `crag.min_score` (calibrate it from the P5 data), **or** the LLM grader says "insufficient", then
-  3. rewrite the query (LLM), retrieve again, and merge the results
-  4. if it's still insufficient, abstain without calling the generator
-  - Record which branch ran in `Answer.timings_ms` and in the logs.
-- **AgenticRAGPipeline:** a loop with at most `agent.max_steps=5` steps. Tools: `search(query, company?, year?)`, which returns the top-5 IDs and previews; `read(chunk_id)`, which returns the full text; and `answer(text, citations)`, which finishes the loop.
-  - With Claude, use native tool use (`tools=[...]`, loop while `stop_reason == "tool_use"`, return the `tool_result` blocks). Note that Claude models reject a forced `tool_choice` of `any` or a named tool, so use `auto` and name the tools in the prompt.
-  - With Ollama, use a JSON-action protocol (`{"tool": "...", "args": {...}}`) parsed each step.
-- **MultiHop-RAG:** at P7 start, clone or download the repo and inspect the corpus and query files (`ls`, `head`). Write the loader to match, and record the file names in §1 and §7. Its "documents" are news articles, so set `page_idx = 0` and chunk with recursive. Evidence matching is by article (title or URL), not page. Null queries have `gold_answer=None`, and the correct behaviour is to abstain.
-
-**Step script `scripts/09_advanced_rag.py "question" --technique multi_query|hyde|decompose|corrective|agentic`.** It prints the intermediate steps: the generated queries or hypothetical document, the grader's decision, each agent step (thought, tool, args, result preview), then the final answer and the number of LLM calls.
+**Implementation notes (as built)**
+- **Query transforms** change *what* is searched: multi_query fuses 3 LLM rewrites (+ the original) with RRF; HyDE embeds an LLM-written fake filing passage for the dense side and keeps the question for BM25; decompose splits multi-part questions. Each costs one LLM call; invalid JSON falls back to plain retrieval (recorded in `degraded`).
+- **CorrectiveRAG:** grade the top rerank score (and optionally an LLM grader); if weak, rewrite and retry, merge, re-grade; still weak → abstain *without* calling the generator.
+- **AgenticRAG:** Claude uses native tool use (`tool_choice: auto` — Claude Opus 5.5 rejects forced tool choice); other LLMs use a JSON-action protocol validated with pydantic, falling back to plain hybrid_rerank after two invalid steps. `agent.max_steps` caps the loop.
+- **MultiHop-RAG** (ODC-BY; 609 news articles, 2,556 queries, 301 null): one article = one DocumentMeta + one Page (page 0), so the FinanceBench metrics work unchanged at article level. `settings.dataset` + `datasets.py` route the whole pipeline; `configs/multihop.yaml` keeps its chunk/BM25 folders separate.
+- **Performance fix made here (applies to P4/P5):** query embeddings and cross-encoder rerank scores are now cached on disk (keyed by model + text, and model + query + chunk). A re-run embeds and re-scores nothing, so an evaluation that took ~19 s/question cold replays in ~0.1 s **and returns the identical ranking** — fixing both the "embedding happens again and again" slowness and the non-reproducible rerank order (Apple MPS float wobble). Document vectors were already skipped by the index manifest.
 
 **Done when**
-- [ ] Each technique runs from the script and from config
-- [ ] `results/{date}_advanced/report.md` compares each technique with the baseline on retrieval metrics (and generation metrics after P8), including latency and LLM calls per question
-- [ ] MultiHop-RAG loads and the agentic pipeline runs on a 50-query sample that includes null queries
+- [x] Each technique runs from `scripts/09_advanced_rag.py` and from config
+- [x] `results/<date>_advanced_query_transforms/` and `_contextual_headers/` compare each against the baseline (retrieval metrics; generation metrics in P8)
+- [x] MultiHop-RAG loads (`finsight download --dataset multihop`) and the agentic pipeline runs on a sample including null queries
 
-**Pitfalls:** query transforms multiply LLM calls and latency (report this). The agent loops forever (the step cap stops it). JSON parsing from a 7B model fails (validate with pydantic, retry once, then fall back to plain hybrid search).
+**Pitfalls (met):** query transforms multiply LLM calls and latency (reported). A 7B/1.5B model emits JSON wrapped in prose — `ask_json` extracts the first object and retries once. The agent can loop; `agent.max_steps` stops it. Reranking and query embedding recomputed every run until cached (fixed above).
 
 **References:** [HyDE (arXiv 2212.10496)](https://arxiv.org/abs/2212.10496) · [RAG-Fusion (arXiv 2402.03367)](https://arxiv.org/abs/2402.03367) · [Anthropic: Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) · [Corrective RAG (arXiv 2401.15884)](https://arxiv.org/abs/2401.15884) · [Self-RAG (arXiv 2310.11511)](https://arxiv.org/abs/2310.11511) · [ReAct (arXiv 2210.03629)](https://arxiv.org/abs/2210.03629) · [MultiHop-RAG (arXiv 2401.15391)](https://arxiv.org/abs/2401.15391) · [Claude tool use docs](https://platform.claude.com/docs)
 
@@ -1114,7 +1109,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P4 Indexing | ✅ done | 2026-11-24 | 31,114 page-aware chunks indexed in **5 min 6 s** on M5 (bge-small on MPS, **106 chunks/s**) · Qdrant 244 MB (embedded), BM25 25 MB (27,097 words), cache 66 MB · re-run 0.07 s · 3M capex gold page: dense rank 36 (no instruction) / 47 (with), BM25 121 → the vocabulary gap P5 must close · **online embedders** (Gemini, Mistral, Cohere, Jina, Voyage, Ollama; OpenAI paid-blocked) via presets + rate limits · dense-only baseline (150 Q): hit@10 0.46, MRR 0.23, doc_hit@10 0.89 · q30: bge-base 0.50 vs bge-small 0.43 hit@10 · 139 tests (137 fast + 2 slow) |
 | P5 Retrieval | ✅ done | 2026-11-24 | 4 chunkers × 8 variants × 150 Q · **best: recursive_384 + dense + company/year filter: hit@10 0.613**, MRR 0.35, doc_hit 0.99, ~110 ms · BM25 alone 0.15; hybrid (no filter) 0.32 < dense 0.46 · company filter: doc_hit 0.83 → 0.99 · local rerank +0–7 pts at ~2.7 s/q, not adopted · 161 tests |
 | P6 Generation | ✅ done | 2026-11-24 | LLM presets + auto (Ollama → Claude → Gemini/Mistral/Groq free tiers → local HF) · 3M capex: local Qwen2.5-1.5B answers **$1,577 million** (correct), 11 s, cited via auto_cite · off-topic question abstains · Claude path tested offline (no key) · 175 tests |
-| P7 Advanced | ⬜ | | |
+| P7 Advanced | ✅ done | 2026-11-24 | query transforms (multi_query, hyde, decompose), corrective + agentic pipelines, contextual headers · MultiHop-RAG loader (609 articles, 2,556 Q, 301 null) via dataset dispatch · **perf fix: query + rerank caches -> re-runs ~19s->0.1s/q and reproducible** · 186 tests |
 | P8 Evaluation | ⬜ | | correct %: · faithfulness: |
 | P9 Serving | ⬜ | | p50 latency: |
 | P10 Production | ⬜ | | |
@@ -1130,6 +1125,11 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-24 | P7 | **Query + rerank caches** (surfaced by the user): local query embeddings and cross-encoder scores cached on disk (`cached_query_vectors`, `ScoreCache`) | Re-running an eval was re-embedding queries and re-scoring the reranker every time (~19 s/question) and the order drifted on Apple MPS. Now a replay is ~0.1 s and byte-identical. Document vectors were already skipped by the manifest |
+| 2026-11-24 | P7 | Datasets behind `datasets.py` dispatch (`settings.dataset`); MultiHop-RAG as one Page per article | The chunking/indexing/eval code stays dataset-agnostic; MultiHop evidence is per-article, which fits the page-range relevance rule |
+| 2026-11-24 | P7 | Query transforms live in the `hybrid_rerank` pipeline via `retrieval.query_transform`, not new pipelines | They change the query, not the pipeline shape; keeps the pipeline registry small |
+| 2026-11-24 | P7 | Agentic pipeline: Claude native tool use, JSON-action protocol for other LLMs, fallback to hybrid_rerank on repeated invalid JSON | Claude Opus 5.5 rejects forced tool_choice; small local models cannot always emit valid tool JSON |
+| 2026-11-24 | P7 | **Contract:** new config `crag`, `agent`; `retrieval.query_transform` now used; added to the fingerprint | Advanced techniques must be traceable in the config hash like everything else |
 | 2026-11-24 | P6 | **Contract change:** `LLMCfg`/`JudgeCfg` became presets (`configs/llms.yaml`) with `auto`; env `LLM_PROVIDER`/`OLLAMA_MODEL`/`ANTHROPIC_MODEL`/`JUDGE_PROVIDER` replaced by `LLM`, `LLM_MODEL`, `JUDGE`; `Answer` gained `warnings` and `degraded` | Same model-choice pattern as embedders; any provider (local, free tier, Claude) by one line; no key and no Ollama still works |
 | 2026-11-24 | P6 | Local fallback LLM `hf-qwen1.5b` (transformers, MPS) added to `auto` | This Mac has no Ollama/Homebrew and no API key; the project must still answer end to end, offline, at zero cost |
 | 2026-11-24 | P6 | Online LLMs over httpx (Gemini, Mistral, Groq, OpenAI-paid) but Claude through the official SDK | Free tiers reuse the P4 limiter/retries; Claude features (effort, refusal fallbacks, typed errors, streaming) come from the SDK |

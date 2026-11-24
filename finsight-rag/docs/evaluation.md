@@ -150,3 +150,31 @@ hit@5 0.527, MRR 0.353, nDCG@10 0.385, doc_hit@10 0.993, ~110 ms per question. B
   (P3) favoured big chunks; retrieval says strategy matters less than filters and the query.
 - **The remaining gap is page-level:** with doc_hit ≈ 0.99 and hit@10 ≈ 0.55, the right filing is found but the right page often
   isn't (vocabulary mismatch, near-duplicate pages). P7 targets this with query rewriting / HyDE.
+
+## P7 — Advanced RAG
+
+### Contextual chunk headers (150 questions, dense, `results/2026-11-24_contextual_headers/`)
+
+Each chunk's *embedded* text gets a header `company | doc FY | page` (the LLM still reads the plain text).
+
+| variant | hit@10 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| recursive_384 + company/year filter | 0.613 | 0.580 | 0.353 | 0.385 |
+| **recursive_384_ctx + company/year filter** | **0.673** | **0.629** | 0.350 | **0.400** |
+| recursive_384, no filter | 0.467 | — | — | — |
+| recursive_384_ctx, no filter | 0.567 | — | — | — |
+
+doc_hit@10 without a filter: 0.913 → 0.973.
+
+**What it says**
+- Contextual headers are the **largest single gain since filters**: +6 pts hit@10 with filters, +10 pts without.
+- The header puts the company and year into the vector, so it partly substitutes for the metadata filter. That makes it useful
+  when the filter extractor misses.
+- MRR is flat. The header helps get the right page *into* the top 10, but not to rank 1.
+- It costs nothing at query time. The only cost is a one-off re-embed.
+
+### Query transforms (multi_query / HyDE / decompose)
+
+`configs/experiments/advanced.yaml` (`make eval-advanced`) compares them on recursive_384 with the local Qwen2.5-1.5B as the
+helper LLM. **Not measured yet:** the 60-question run was stopped before it finished, because each question needs 1–4 LLM calls
+on CPU/MPS. Run `make eval-advanced` to fill this in. The report adds an "LLM calls/q" column for the cost side.

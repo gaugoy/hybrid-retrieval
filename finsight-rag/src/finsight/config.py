@@ -64,6 +64,8 @@ FINGERPRINT_FIELDS = {
     "rerank",
     "pipeline",
     "generation",
+    "crag",
+    "agent",
     "llm",
     "judge",
 }
@@ -228,6 +230,17 @@ class GenerationCfg(_Strict):
     abstain_phrase: str = "Not found in the provided filings."
 
 
+class CragCfg(_Strict):
+    """Corrective RAG (P7): when to distrust the retrieved context."""
+
+    min_score: float = 0.70  # top retrieval score below this = insufficient (calibrated in P7)
+    llm_grader: bool = False  # also ask the LLM "is this enough?" (one extra call)
+
+
+class AgentCfg(_Strict):
+    max_steps: int = Field(5, gt=0, le=20)
+
+
 LLMProvider = Literal[
     "auto", "ollama", "hf", "anthropic", "gemini", "mistral", "groq", "openai", "fake"
 ]
@@ -346,6 +359,8 @@ class Settings(_Strict):
     rerank: RerankCfg = Field(default_factory=RerankCfg)
     pipeline: Literal["naive", "hybrid_rerank", "corrective", "agentic"] = "hybrid_rerank"
     generation: GenerationCfg = Field(default_factory=GenerationCfg)
+    crag: CragCfg = Field(default_factory=CragCfg)
+    agent: AgentCfg = Field(default_factory=AgentCfg)
     llm: LLMCfg = Field(default_factory=LLMCfg)
     judge: JudgeCfg = Field(default_factory=JudgeCfg)
     api: ApiCfg = Field(default_factory=ApiCfg)

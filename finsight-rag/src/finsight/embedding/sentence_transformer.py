@@ -32,6 +32,8 @@ from finsight.observability.logging import get_logger
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
+    from finsight.embedding.cache import EmbeddingCache
+
 log = get_logger(__name__)
 
 
@@ -69,6 +71,8 @@ class SentenceTransformerEmbedder(Embedder):
         self.batch_size = batch_size
         self.query_template = query_template
         self.document_template = document_template
+        # attached by make_embedder; caches query vectors (free + reproducible re-runs)
+        self.query_cache: EmbeddingCache | None = None
 
     @cached_property
     def model(self) -> SentenceTransformer:
@@ -107,11 +111,9 @@ class SentenceTransformerEmbedder(Embedder):
         )
         return np.asarray(vecs, dtype=np.float32)
 
-    def embed_queries(self, texts: list[str]) -> np.ndarray:
-        if not texts:
-            return np.zeros((0, self.dim), dtype=np.float32)
+    def _encode(self, texts: list[str]) -> np.ndarray:
         vecs = self.model.encode(
-            [self.query_template.format(text=t) for t in texts],
+            texts,
             batch_size=self.batch_size,
             normalize_embeddings=True,
             convert_to_numpy=True,
@@ -119,11 +121,13 @@ class SentenceTransformerEmbedder(Embedder):
         )
         return np.asarray(vecs, dtype=np.float32)
 
+    def embed_queries(self, texts: list[str]) -> np.ndarray:
+        from finsight.embedding.cache import cached_query_vectors
+
+        formatted = [self.query_template.format(text=t) for t in texts]
+        ident = f"{self.model_name}|query|{self.query_template}"
+        vecs, _ = cached_query_vectors(self.query_cache, ident, formatted, self._encode, self.dim)
+        return vecs
+
     def embed_query(self, text: str) -> np.ndarray:
-        vec = self.model.encode(
-            [self.query_template.format(text=text)],
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
-        return np.asarray(vec, dtype=np.float32)[0]
+        return self.embed_queries([text])[0]
