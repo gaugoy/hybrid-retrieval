@@ -237,30 +237,21 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 
 ### 3.6 Makefile targets
 
-```make
-setup:   ## install deps + pre-commit hooks
-	uv sync --all-extras && uv run pre-commit install
-lint:    ## ruff + mypy
-	uv run ruff check . && uv run ruff format --check . && uv run mypy src
-fmt:
-	uv run ruff format . && uv run ruff check --fix .
-test:
-	uv run pytest --cov=finsight --cov-report=term-missing
-data:    ## P1
-	uv run python scripts/01_download_data.py
-ingest:  ## P2 + P3
-	uv run python scripts/03_parse_pdfs.py && uv run python scripts/04_chunk.py
-index:   ## P4
-	uv run python scripts/05_embed_and_index.py
-eval-retrieval:  ## P5
-	uv run python scripts/07_eval_retrieval.py --experiment configs/experiments/retrieval_ablation.yaml
-eval:    ## P8
-	uv run python scripts/10_eval_end_to_end.py --experiment configs/experiments/end_to_end.yaml
-serve:   ## P9
-	uv run uvicorn finsight.api.main:app --reload --port 8000
-ui:
-	uv run streamlit run ui/streamlit_app.py
-```
+`make help` lists the real targets; the Makefile is the source of truth. As of P3:
+
+| Target | Runs | Phase |
+|---|---|---|
+| `make setup` / `make hooks` | `uv sync --all-extras`, pre-commit hooks (installed from the git root) | P0 |
+| `make check-env` | `scripts/00_check_env.py` | P0 |
+| `make lint` / `make fmt` / `make test` / `make test-slow` | ruff + mypy · auto-fix · fast tests with coverage · real-data tests | P0 |
+| `make notebooks` / `make kernel` / `make jupyter` | `tools/build_notebooks.py` · register the `.venv` kernel · JupyterLab | P1 |
+| `make data` | `scripts/01_download_data.py` | P1 |
+| `make ingest` | `finsight ingest --workers 0`: parse PDFs on all cores, then chunk with the configured strategy | P2 + P3 |
+| `make chunk-sweep` | `finsight chunk --sweep`: every strategy × size, report in `results/` | P3 |
+| `make index`, `make eval-retrieval`, `make eval`, `make serve`, `make ui` | placeholders until P4, P5, P8, P9 | later |
+
+Learning scripts (`scripts/NN_*.py`) run single-process and print everything; `make` targets call the concise
+`finsight` CLI, which can use all cores (see P2 on why processes and cell-based scripts don't mix on macOS).
 
 ---
 
@@ -647,41 +638,51 @@ plain-vs-ours label–number adjacency comparison on the evidence pages.
 **Goal:** four interchangeable chunkers that produce `Chunk`s with complete metadata, plus statistics to compare them.
 **Concepts:** chunk size vs. precision/recall, overlap, structure-aware chunking, small-to-big retrieval. See Interview Guide §P3.
 
-**Files**
+**Files (as built)**
 ```
-src/finsight/chunking/__init__.py  base.py  registry.py  tokenizer.py
-src/finsight/chunking/fixed.py         # FixedTokenChunker
-src/finsight/chunking/recursive.py     # RecursiveChunker
-src/finsight/chunking/page_aware.py    # PageAwareChunker
-src/finsight/chunking/parent_child.py  # ParentChildChunker
-src/finsight/chunking/contextual.py    # add_context_header(chunk, meta) (used in P7)
-src/finsight/chunking/pipeline.py      # chunk_corpus(settings, strategy) -> Path to parquet
-scripts/04_chunk.py
-tests/unit/test_chunkers.py
+src/finsight/chunking/tokenizer.py     # HFTokenizer (bge WordPiece, offsets), WhitespaceTokenizer (tests), get_tokenizer
+src/finsight/chunking/base.py          # DocText (doc text + page map + token offsets), split_spans, merge_spans, Chunker ABC
+src/finsight/chunking/registry.py      # @register_chunker, build_chunker(cfg, tokenizer, reserve_tokens)
+src/finsight/chunking/fixed.py         # FixedTokenChunker: token windows, stride = size - overlap
+src/finsight/chunking/recursive.py     # RecursiveChunker: paragraph → line → sentence → word, then pack
+src/finsight/chunking/page_aware.py    # PageAwareChunker: per page + carry table column headers; is_column_header
+src/finsight/chunking/parent_child.py  # ParentChildChunker: page-aware children + page parents (parents())
+src/finsight/chunking/contextual.py    # add_context_header → embed_text (evaluated in P7)
+src/finsight/chunking/pipeline.py      # chunk_corpus (+ manifest skip), chunk_stats, evidence_coverage, run_sweep, save_sweep_report
+scripts/04_chunk.py                    # cell-based: tokens → one page × 4 strategies → overlap → header carry → corpus → sweep
+tests/unit/test_chunkers.py  tests/integration/test_chunk_pipeline.py
+results/2026-11-24_chunking_sweep/report.md   # the comparison table (committed)
 ```
 
-**Implementation notes**
-- `tokenizer.py`: count tokens with the **embedding model's own tokenizer** (`AutoTokenizer.from_pretrained("BAAI/bge-small-en-v1.5")`, loaded lazily). bge models accept at most **512 tokens**; anything longer is silently truncated. Keep `chunk_tokens ≤ 480` so a contextual header still fits.
-- **fixed:** concatenate a document's pages, slide a window of `chunk_tokens` with `overlap_tokens`. Track the character offset to page mapping so each chunk gets a correct `page_start`/`page_end`.
-- **recursive:** split on `\n\n`, then `\n`, then `. `, then a space, until pieces fit. Merge neighbouring pieces up to `chunk_tokens`. Carry `overlap_tokens` of trailing text into the next chunk.
-- **page_aware:** like recursive, but **never cross a page boundary**, so `page_start == page_end` and citations are exact. Keep a `[TABLE]` block whole if it fits; if it doesn't, split it by rows and repeat the header row in each piece.
-- **parent_child:** parents are whole pages (truncated to `parent_tokens`, default 1500, for the LLM). Children are page_aware chunks of `child_tokens` (default 200) with `parent_id` set. **Index only the children.** Parents go in `data/chunks/parent_child_parents.parquet` and are looked up at generation time.
-- Default `embed_text = text`. P7 adds the contextual header.
-- The chunk ID format is in §4.1. Make IDs deterministic: the same input must give the same IDs.
+**Implementation notes (as built)**
+- Tokens are counted with the **embedding model's tokenizer** (`BAAI/bge-small-en-v1.5`, WordPiece, fast). bge accepts 512 tokens
+  **including** `[CLS]`/`[SEP]`, so the limit for text is **510** (`config.MAX_EMBED_TOKENS`, enforced on `chunk_tokens`).
+- `DocText` tokenizes each document once and stores token start offsets, so the token count of any span is a binary search.
+  Chunk sizes are therefore exact, and a whole-corpus run takes ~10 s per strategy.
+- Chunk IDs: `{doc}::p{page_start}-{page_end}::c{seq}`; parents: `{doc}::p{p}-{p}::parent`. Deterministic.
+- **fixed:** windows over the whole document (ignores pages and words). **recursive:** natural boundaries, still crosses pages.
+  **page_aware:** never crosses a page (`page_start == page_end`, exact citations). **parent_child:** page-aware children of
+  `child_tokens` (overlap ≤ child/4), parents = the page truncated to `parent_tokens`, in `<name>_parents.parquet`.
+- **Table header carry** (`chunking.carry_table_header`, default on): a page-aware chunk that contains table rows but not their
+  column header (`(Millions) | 2018 | 2017 | 2016`, `December 31, 2020 | ...`, `Fiscal 2023`, `Q4 2023`) gets the header prepended.
+  Pages with a header row are packed with room reserved for it, so it always fits.
+- Contextual headers (`chunking.contextual_headers`) reduce the budget by 24 tokens and write `embed_text` only; measured in P7.
+- Output names: `<strategy>_<size>[_ctx].parquet` with a `.manifest.json` (inputs hash: ingestion output + chunking settings +
+  tokenizer + `CHUNKER_VERSION`). Bump `CHUNKER_VERSION` whenever chunking logic changes.
 
-**Step script `scripts/04_chunk.py --strategy page_aware --chunk-tokens 384 [--all]`.** `--all` runs every strategy at 256 and 512 tokens. It prints:
-- per strategy: number of chunks, token p50/p95/max, the share of chunks spanning more than one page, and the share of chunks over 512 tokens (must be 0)
-- 2 sample chunks with their metadata, including one that contains a `[TABLE]`
-- **evidence coverage:** for each evidence item, whether at least one chunk contains ≥ 80% of the evidence tokens. This measures the "best possible" recall of the chunking alone.
+**Step script `scripts/04_chunk.py [--strategy S --tokens N] [--sweep]`.** Tokens vs words → one page through all 4 strategies →
+overlap → header carry on/off → parent/children → corpus chunking with quality stats → (optional) the sweep.
 
 **Done when**
-- [ ] All 4 chunkers are registered; parquet files are written
-- [ ] Unit tests: deterministic IDs, overlap is respected, page_aware never crosses pages, parent links are valid, no chunk over 512 tokens
-- [ ] The stats table goes into `docs/evaluation.md` (create it now; it grows in P5 and P8)
+- [x] All 4 chunkers are registered; parquet files are written (12 configurations in the sweep)
+- [x] Unit tests: deterministic IDs, overlap respected, page_aware never crosses pages, parent links valid, no chunk over the
+  limit (recounted with the real tokenizer: `over_limit_share = 0` for every configuration)
+- [x] The stats table is in `docs/evaluation.md` and `results/2026-11-24_chunking_sweep/report.md`
 
-**Pitfalls:** an off-by-one in the page tracking of `fixed`. Whitespace-only chunks. Counting tokens with tiktoken instead of the embedding model's tokenizer (the counts differ).
+**Pitfalls:** off-by-one in page tracking (tested). Counting with the wrong tokenizer. Forgetting the 2 special tokens. Treating
+"evidence in one chunk" as the decision metric: it favours big chunks by construction; P5 decides with retrieval metrics.
 
-**References:** [Pinecone: chunking strategies](https://www.pinecone.io/learn/chunking-strategies/) · [Chroma research: evaluating chunking](https://research.trychroma.com/evaluating-chunking) · [Lost in the Middle (arXiv 2307.03172)](https://arxiv.org/abs/2307.03172) · [HF tokenizers](https://huggingface.co/docs/transformers/main_classes/tokenizer)
+**References:** [Pinecone: chunking strategies](https://www.pinecone.io/learn/chunking-strategies/) · [Chroma research: evaluating chunking](https://research.trychroma.com/evaluating-chunking) · [Lost in the Middle (arXiv 2307.03172)](https://arxiv.org/abs/2307.03172) · [HF tokenizers](https://huggingface.co/docs/transformers/main_classes/tokenizer) · [Parent document retrieval](https://python.langchain.com/docs/how_to/parent_document_retriever/)
 
 ---
 
@@ -1081,7 +1082,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P0 Scaffold | ✅ done (CI green) | 2026-11-23 | 29 unit tests, 81% coverage · lint + mypy clean · torch 2.15 with MPS on M5 · env check: 4 ok / 5 info / 1 warn (Ollama not installed yet) |
 | P1 Data | ✅ done | 2026-11-23 | 150 Q · 189 evidence items · 84 PDFs (166.5 MB, **12,013 pages**) · 32 companies · download 23 s, re-run 0.1 s · 0 consistency problems · 43 unit tests |
 | P2 Ingestion | ✅ done | 2026-11-24 | 12,013 pages (69 empty, 5,098 with tables, 40.4M chars) · **evidence on gold page 189/189 (100%)**, mean overlap 0.998, 0 offsets · label–number adjacency **0.28 → 0.97** vs plain extraction (160 numeric evidence pages) · 70 s sequential / 17 s on 6 processes · 96 header/footer patterns · 75 tests |
-| P3 Chunking | ⬜ | | chunks per strategy: |
+| P3 Chunking | ✅ done | 2026-11-24 | 4 strategies × 3 sizes swept · page_aware_384: 31,114 chunks, 0% cross pages, 72% of evidence in one chunk · fixed/recursive cross pages 30–60% · evidence-in-one-chunk 44–48% @256 → 68–72% @384 → 80–87% @480 · table chunks with their column header 64% → 94% (carry) · 0 chunks over the 510-token limit · ~10 s per strategy · 99 tests |
 | P4 Indexing | ⬜ | | index time: · size: |
 | P5 Retrieval | ⬜ | | best config: · Recall@10: |
 | P6 Generation | ⬜ | | |
@@ -1101,6 +1102,10 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-24 | P3 | **Contract change:** `chunk_tokens`/`child_tokens` capped at **510** (`MAX_EMBED_TOKENS`), not 512; new `chunking.carry_table_header` | bge's 512 includes `[CLS]`/`[SEP]`. Carrying the column header raised table chunks that contain it from 64% to 94% |
+| 2026-11-24 | P3 | Token counts via one tokenization per document + binary search over token offsets (`DocText`) | Exact sizes with the model's tokenizer at ~10 s per corpus pass, instead of re-tokenizing every candidate piece |
+| 2026-11-24 | P3 | Default stays `page_aware` 384; **final chunk choice deferred to P5** | "Evidence in one chunk" favours big chunks by construction (fixed_480 scores highest but 60% of its chunks span two pages); retrieval metrics must decide |
+| 2026-11-24 | P3 | `results/` reports use the local date; `sweep.csv` is ignored by the parent repo's `*.csv` rule, `report.md` holds the same table | Keep the committed artifact readable on GitHub |
 | 2026-11-24 | P2 | **Row reconstruction from word boxes instead of `page.find_tables()`**; no `tables.py` (logic lives in `pdf_parser.py`) | Measured `find_tables()` at 1.5 s/page (≈5 h for 12k pages) with cells that lost spaces and split numbers. Rows from `get_text("words")` take ~3 ms/page and raise label–number adjacency from 0.28 to 0.97 |
 | 2026-11-24 | P2 | **Contract change:** new `IngestionCfg` section (`ingestion:` in base.yaml), included in the fingerprint | Parsing settings change results, so they must be traceable |
 | 2026-11-24 | P2 | Evidence overlap compares **space-insensitively** (substring match on letters+digits) | FinanceBench's evidence text came from an older extractor that dropped spaces ("Netsales"); PyMuPDF 2.1 keeps them. A space-sensitive metric would penalise correct parsing |

@@ -103,7 +103,15 @@ def configure_logging(level: str = "INFO", json_format: bool = False) -> None:
     root.addHandler(handler)
     root.setLevel(level)
     # Third-party libraries are chatty at INFO.
-    for noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "filelock"):
+    for noisy in (
+        "httpx",
+        "httpx2",
+        "httpcore",
+        "urllib3",
+        "huggingface_hub",
+        "sentence_transformers",
+        "filelock",
+    ):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
 
 

@@ -2,7 +2,7 @@
 # Every target runs inside the uv-managed environment (.venv, Python 3.12).
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks check-env lint fmt test test-slow notebooks kernel jupyter data ingest index eval-retrieval eval serve ui clean-cache
+.PHONY: help setup hooks check-env lint fmt test test-slow notebooks kernel jupyter data ingest chunk-sweep index eval-retrieval eval serve ui clean-cache
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -44,8 +44,11 @@ jupyter: ## open JupyterLab in notebooks/ (uses this project's .venv kernel)
 data: ## P1: download FinanceBench
 	uv run python scripts/01_download_data.py
 
-ingest: ## P2: parse PDFs into clean pages (all cores; chunking is added in P3)
+ingest: ## P2+P3: parse PDFs (all cores) and chunk them with the configured strategy
 	uv run finsight ingest --workers 0
+
+chunk-sweep: ## P3: compare every chunking strategy × size; report in results/
+	uv run finsight chunk --sweep
 
 index: ## P4: embed + build Qdrant and BM25 indexes
 	uv run python scripts/05_embed_and_index.py

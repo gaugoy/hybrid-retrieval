@@ -137,23 +137,65 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 
 **Concepts**
 - **Why chunk at all:** embedding models have a token limit (512 for bge); smaller units retrieve more precisely; the LLM context is limited and costs money.
-- **The trade-off:** small chunks are precise but lose context; large chunks keep context but dilute the embedding and add noise.
+- **The trade-off:** small chunks are precise but lose context; large chunks keep context but dilute the embedding (one vector for many topics) and send more noise to the LLM.
 - **Overlap:** prevents a fact from being cut in half at a boundary. The cost is more chunks and some duplication.
 - **Strategies:** fixed tokens · recursive (by structure: paragraph → sentence) · **page-aware** (exact citations) · **parent-child / small-to-big** (search small chunks, give the LLM the big parent) · semantic chunking (split where the embedding similarity drops) · contextual chunking (prepend document context).
 
+**What this project uses, and why** (say this in one breath)
+
+> "**Page-aware recursive chunking, 384 tokens, 64-token overlap, with the table column header carried into every table chunk.** Parent-child is built and switchable from config, and the final choice is made on retrieval metrics in P5."
+
+| Choice | What it means | Why (the reason you give) |
+|---|---|---|
+| **Page-aware** | Recursive splitting *inside* one page; a chunk never crosses a page boundary | Every answer must cite a page ("3M 10-K FY2018, p. 60"). With fixed/recursive, **30–60% of chunks span two pages**, so the citation is ambiguous. Page-aware: **0%**. Filing pages are also natural units (one statement, one note). |
+| **Recursive inside the page** | Cut at `\n\n` → `\n` → `. ` → space, then pack greedily | Keeps paragraphs and table rows whole. A table row (`label \| 2018 \| 2017`) is one line, so it is never split mid-row. |
+| **384 tokens** | Middle of the sweep (256 / 384 / 480) | 72% of evidence fits in one chunk (vs 48% at 256), while the vector stays focused. 480 gives 82.5% but blurrier embeddings and more LLM noise; that trade-off is decided with Recall@k in P5. |
+| **64-token overlap** | The tail of one chunk repeats at the start of the next | A sentence on the boundary is whole in at least one chunk; ~17% duplication is cheap. |
+| **Table header carry** | If a chunk holds table rows but not their header row, prepend `(Millions) \| 2018 \| 2017 \| 2016` | Without it, `Inventories \| (509) \| (387)` doesn't say which year. Table chunks with their header: **64% → 94%**. The header's tokens are **reserved** in the budget, so the 510 limit still holds. |
+| **Model's own tokenizer** | Count with bge's WordPiece, cap at 510 | Over-long chunks are silently truncated by the embedder. 0 chunks over the limit, recounted. |
+
+**Benefits of this choice (vs the alternatives)**
+- **Exact, verifiable citations**: page_start == page_end on every chunk, so the UI and the faithfulness check (P8) can point at one page.
+- **Numbers keep their meaning**: header carry plus whole-row splitting means a retrieved number always comes with its label and its year. This is the #1 failure mode in financial RAG.
+- **Better containment than the naive baselines at the same size**: at 384 tokens, page-aware 72.0% vs fixed 68.3% vs recursive 68.8%, *despite* never crossing a page.
+- **No text lost**: union overlap 0.998 = the parsing ceiling.
+- **Swappable, measurable**: all four strategies sit behind a registry and one config key, so P5 can compare them on Recall@10/MRR without code changes.
+- **Cost of the choice (say it before they do):** a sentence continuing onto the next page is split in two, and at 480 tokens page-aware contains 4 points less evidence than fixed (82.5% vs 86.8%). Parent-child fixes the context side if P5 shows it matters.
+
 **Most-asked questions**
-1. *"How do you choose the chunk size?"*
-   → Not by rule of thumb. I measured it: 4 strategies × 2 sizes on Recall@10 and evidence coverage. 📌 The best was ___ at ___ tokens. It also depends on the embedding model's limit and how dense the documents are. Tables want larger units; prose can be smaller.
-2. *"What is parent-child retrieval, and why does it help?"*
-   → Embed small child chunks (around 200 tokens) for precise matching, then send the LLM the parent (the whole page or section) for context. It separates *what matches well* from *what reads well*. Deduplicate parents when several children hit the same one.
-3. *"What happens if a chunk is longer than the embedding model's limit?"*
-   → It is **silently truncated**: the tail is never embedded. That's why I count tokens with the embedding model's own tokenizer and assert that no chunk exceeds 512 tokens.
-4. *"Semantic chunking: worth it?"*
-   → Sometimes. It costs an embedding pass at ingest time, and research results are mixed. Structure-aware chunking often matches it on well-structured documents. I'd test it on the same eval before adopting it.
+1. *"Which chunking strategy did you use and why?"*
+   → The quote above. Then the three reasons: exact page citations (0% cross-page), tables stay readable (header carry 64% → 94%), and it beat fixed/recursive on containment at the same size. Finish with: "I keep the others behind a registry and choose on retrieval metrics."
+2. *"How do you choose the chunk size?"*
+   → Not by rule of thumb. I swept 4 strategies × 3 sizes and measured page-crossing, evidence containment and token limits; the final pick uses Recall@10/MRR on the gold pages (P5). It also depends on the embedding model's limit and how dense the documents are: tables want larger units, prose can be smaller.
+3. *"Why not just use fixed-size chunks? They scored highest at 480."*
+   → Containment favours big chunks by construction, so it can't pick the winner alone. Fixed chunks cross pages 60% of the time at 480, which breaks citations, and they cut tables mid-row. A 4-point containment gain doesn't pay for wrong citations.
+4. *"What is parent-child retrieval, and why does it help?"*
+   → Embed small child chunks (~200 tokens) for precise matching, then send the LLM the parent (here, the whole page, capped at 1,500 tokens) for context. It separates *what matches well* from *what reads well*. Deduplicate parents when several children hit the same one. Cost: more vectors (95k children at 128 tokens) and a bigger LLM prompt.
+5. *"What happens if a chunk is longer than the embedding model's limit?"*
+   → It is **silently truncated**: the tail is never embedded. bge's 512 includes `[CLS]`/`[SEP]`, so 510 text tokens. I count with the model's own tokenizer and recount every chunk in a check that fails the run.
+6. *"How do you handle tables when chunking?"*
+   → Rows are one line each (from P2), the splitter never cuts inside a line, and the column-header row is carried into every chunk of that table. Alternatives: keep each table as one chunk, or embed an LLM-written table summary and give the raw table to the LLM.
+7. *"How much overlap, and why?"*
+   → 64 tokens (~17% of 384). Enough to keep a boundary sentence whole; more just duplicates text and inflates the index. Overlap matters less for page-aware chunks because pages already break at natural boundaries.
+8. *"How do you evaluate chunking without running the whole pipeline?"*
+   → Intrinsic checks: share of gold evidence contained in one chunk, union coverage (is text lost?), share of chunks crossing pages, token distribution. Then the real test: retrieval Recall@k/MRR with the chunker as the only variable.
+9. *"Semantic chunking: worth it?"*
+   → Sometimes. It costs an embedding pass at ingest time and research results are mixed; structure-aware chunking often matches it on well-structured documents like filings. I'd test it on the same eval before adopting it.
+10. *"What is contextual chunking?"*
+    → Prepend document context (company, filing, year, page) to the text that gets *embedded*, so a chunk saying "revenue grew 5%" is findable for "3M 2018 revenue". Implemented here as an option: it writes only `embed_text` (the LLM still sees clean text) and reserves 24 tokens for the header. Anthropic's Contextual Retrieval goes further with an LLM-written sentence per chunk.
+11. *"How would this change for millions of documents or frequent updates?"*
+    → Chunk IDs are deterministic (`doc::p{page}::c{n}`), so re-ingesting a changed document replaces only its chunks. A manifest with a config fingerprint skips unchanged work. Chunking is per-document, so it parallelizes trivially across workers.
+12. *"Chunks lose context: the word 'it' or 'the Company' with no name. How do you fix that?"*
+    → Contextual headers (metadata in the embedded text), metadata filters (company/year at query time), and parent-child to give the LLM the surrounding page.
 
-**📌 Your numbers:** chunks per strategy 📌 · best strategy and size 📌 · Recall@10 difference between best and worst chunker 📌
+**📌 Your numbers (P3, `docs/evaluation.md`):** page_aware_384 = 31,114 chunks, 0% span two pages vs 30–60% for fixed/recursive · evidence in one chunk ~45% @256 → ~70% @384 → ~83% @480 · @384: page-aware 72.0% vs fixed 68.3% vs recursive 68.8% · table chunks containing their column header **64% → 94%** with header carry · 0 chunks over the 510-token limit · Recall@10 difference between chunkers: 📌 (P5)
 
-**Go deeper:** [Chroma: evaluating chunking](https://research.trychroma.com/evaluating-chunking) · [Pinecone: chunking strategies](https://www.pinecone.io/learn/chunking-strategies/) · [Lost in the Middle](https://arxiv.org/abs/2307.03172)
+**Stories worth telling:**
+- *"512 is not 512."* bge's limit includes `[CLS]` and `[SEP]`, so 510 text tokens; and numbers are expensive: `(1,577)` is 6 WordPiece tokens. I count with the model's own tokenizer and recount every chunk to prove none is truncated.
+- *"Which year is this number?"* Splitting a balance sheet loses the `2018 | 2017 | 2016` header row in later chunks. I carry the column header into every table chunk on the page (64% → 94%), reserving room for it so the size limit still holds.
+- *"I didn't pick the winner on a proxy."* My containment metric favours big chunks by construction, so I deferred the choice to retrieval metrics (P5).
+
+**Go deeper:** [Chroma: evaluating chunking](https://research.trychroma.com/evaluating-chunking) · [Pinecone: chunking strategies](https://www.pinecone.io/learn/chunking-strategies/) · [Anthropic: Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) · [Lost in the Middle](https://arxiv.org/abs/2307.03172)
 
 ---
 

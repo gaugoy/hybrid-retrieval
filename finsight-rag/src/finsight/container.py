@@ -11,13 +11,21 @@ WHY
   until something asks for it, and it is created only once per container.
 
 GROWTH PLAN
-  P4 adds: embedder, qdrant, bm25 · P5: retrievers, reranker · P6: llm, pipeline · P8: judge.
+  P3: tokenizer, chunker (done) · P4: embedder, qdrant, bm25 · P5: retrievers, reranker ·
+  P6: llm, pipeline · P8: judge.
 """
 
 from __future__ import annotations
 
+from functools import cached_property
+from typing import TYPE_CHECKING
+
 from finsight.config import Settings
 from finsight.observability.logging import get_logger
+
+if TYPE_CHECKING:
+    from finsight.chunking.base import Chunker
+    from finsight.chunking.tokenizer import Tokenizer
 
 log = get_logger(__name__)
 
@@ -26,6 +34,20 @@ class Container:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         log.debug("container created", extra={"config_fingerprint": settings.fingerprint()})
+
+    @cached_property
+    def tokenizer(self) -> Tokenizer:
+        """The embedding model's tokenizer (P3): used to size chunks."""
+        from finsight.chunking.tokenizer import get_tokenizer
+
+        return get_tokenizer(self.settings.embedding.model)
+
+    @cached_property
+    def chunker(self) -> Chunker:
+        """The configured chunking strategy (P3)."""
+        from finsight.chunking.pipeline import make_chunker
+
+        return make_chunker(self.settings, self.tokenizer)
 
     def describe(self) -> dict[str, str]:
         """A short summary of what this container would build: handy for logs and /v1/config."""

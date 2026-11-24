@@ -16,7 +16,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from finsight.config import load_settings
+from finsight.config import Settings, load_settings
 from finsight.errors import FinsightError
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="FinSight RAG command line.")
@@ -87,7 +87,7 @@ def ingest(
     workers: int = typer.Option(0, help="Processes: 0 = all cores, 1 = sequential"),
     force: bool = typer.Option(False, help="Re-parse even if outputs are up to date"),
 ) -> None:
-    """Parse PDFs into clean pages (pages.parquet). [P2] Chunking arrives in P3."""
+    """Parse PDFs into clean pages, then chunk them (configured strategy). [P2+P3]"""
     from finsight.ingestion.pipeline import ingest_all
     from finsight.observability.logging import configure_logging
 
@@ -95,13 +95,52 @@ def ingest(
     configure_logging(settings.logging.level, settings.logging.json_format)
     report = ingest_all(settings, limit_docs=limit_docs, workers=workers, force=force)
     console.print(
-        f"docs={report.n_docs} pages={report.n_pages} empty={report.n_empty_pages} "
+        f"parse: docs={report.n_docs} pages={report.n_pages} empty={report.n_empty_pages} "
         f"tables={report.n_table_pages} skipped={report.skipped} time={report.elapsed_s}s"
     )
     if report.failures:
         for name, err in report.failures.items():
             console.print(f"[red]✘ {name}: {err}[/]")
         raise typer.Exit(1)
+    _chunk(settings, force=force)
+
+
+def _chunk(settings: Settings, force: bool = False) -> None:
+    from finsight.chunking.pipeline import chunk_corpus
+
+    r = chunk_corpus(settings, force=force)
+    console.print(
+        f"chunk: {r.name} chunks={r.n_chunks} parents={r.n_parents} "
+        f"skipped={r.skipped} time={r.elapsed_s}s"
+    )
+
+
+@app.command()
+def chunk(
+    config: Path | None = ConfigOpt,
+    strategy: str | None = typer.Option(None, help="fixed | recursive | page_aware | parent_child"),
+    tokens: int | None = typer.Option(None, help="chunk_tokens (child_tokens for parent_child)"),
+    sweep: bool = typer.Option(
+        False, help="Run every strategy × size and save a report in results/"
+    ),
+    force: bool = typer.Option(False, help="Re-chunk even if up to date"),
+) -> None:
+    """Chunk pages.parquet with the configured (or given) strategy. [P3]"""
+    from finsight.chunking.pipeline import run_sweep, save_sweep_report, to_markdown
+
+    overrides: dict[str, object] = {}
+    if strategy:
+        overrides["strategy"] = strategy
+    if tokens:
+        overrides["child_tokens" if strategy == "parent_child" else "chunk_tokens"] = tokens
+    settings = load_settings(config, {"chunking": overrides} if overrides else None)
+    if sweep:
+        df = run_sweep(settings, force=force)
+        out = save_sweep_report(settings, df)
+        console.print(to_markdown(df))
+        console.print(f"report: {out}")
+        return
+    _chunk(settings, force=force)
 
 
 @app.command()
