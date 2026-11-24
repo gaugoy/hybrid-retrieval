@@ -28,17 +28,18 @@
 
 **30 seconds (the elevator version)**
 > "I built FinSight RAG, a question-answering system over real SEC filings that gives cited, page-level answers, and says 'not found'
-> instead of guessing. It runs fully locally (bge embeddings, a local reranker, and a 7B model on Ollama), with Claude available by config.
-> I scored every design choice on FinanceBench against page-level ground truth. For example, hybrid search plus reranking raised
-> Recall@10 from 📌 to 📌 compared with dense-only, and CI blocks retrieval regressions."
+> instead of guessing. It runs fully locally at $0 (bge embeddings, a local LLM; Ollama, free-tier APIs or Claude by config).
+> I scored every design choice on FinanceBench against page-level ground truth. For example, metadata filters plus contextual chunk
+> headers raised hit@10 from 0.46 to 0.67 over plain dense search, while the textbook "hybrid + reranker" measurably did *not* help,
+> so I didn't ship it. CI blocks retrieval regressions."
 
 **2 minutes (structure: problem → approach → evidence → trade-offs)**
 1. *Problem:* analysts search 100–300-page filings; plain LLMs make up numbers; wrong financial answers are expensive.
 2. *Learning first:* I rebuilt BM25, dense retrieval, RRF and reranking on FiQA to understand each one on its own.
 3. *Product:* PDF parsing with table handling → 4 chunking strategies → hybrid retrieval with metadata filters → cross-encoder rerank → a grounded prompt with citation checks → abstention.
-4. *Evidence:* an ablation table (📌 best row), judge-scored correctness 📌%, faithfulness 📌, p50 latency 📌 ms.
-5. *Trade-offs:* the reranker adds 📌 ms for +📌 recall; query transforms help comparison questions but cost 2–4× the LLM calls.
-6. *Production:* typed config, FastAPI with streaming, Docker Compose, a CI regression gate, fallbacks.
+4. *Evidence:* a 150-question ablation (best: recursive_384 + dense + company/year filter, hit@10 0.613; 0.673 with contextual headers), end-to-end numeric match 0.31 with a 1.5B local model (30 Q), retrieval p50 ~110 ms, answer p50 2.5 s. The local LLM judge proved unreliable (90/90 "correct"), so I report exact numeric match instead.
+5. *Trade-offs:* the local reranker adds ~2.6 s per question for −3 to +7 pts hit@10, so it's off by default. Corrective RAG cost 2.6× the latency for no gain with a small model. Query transforms cost 1–4 extra LLM calls per question.
+6. *Production:* typed config with a fingerprint, FastAPI with SSE streaming, a Streamlit UI, caches (query vectors, rerank scores, answers), fallbacks with `degraded` flags, a CI regression gate, a runbook and ADRs. It runs as three independent processes (LLM, API, UI).
 
 **5 minutes:** the 2-minute version plus a live demo of the Streamlit "under the hood" panel. Show one question where BM25 wins (an exact line-item name), one where dense wins (a paraphrase), and one correct abstention.
 
@@ -340,11 +341,11 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 
 **Most-asked questions**
 1. *"How do you reduce hallucinations in RAG?"*
-   → Better retrieval first (most hallucinations come from missing context), a strict grounding prompt, required citations with automatic checks, an abstain option, CRAG-style evidence grading, a faithfulness eval, and a lower-temperature or stronger model. I measure it: faithfulness 📌.
+   → Better retrieval first (most hallucinations come from missing context), a strict grounding prompt, required citations with automatic checks, an abstain option, CRAG-style evidence grading, a faithfulness eval, and a lower-temperature or stronger model. I measure it with citation checks on every answer (hallucinated-citation and uncited-answer warnings) and numeric match against gold (0.31 with the local 1.5B). LLM-judged faithfulness is wired (`faithfulness: true`) but needs a judge from another model family, validated on human labels, before I'd quote it.
 2. *"How do you handle the context window?"*
    → A token budget during assembly, reranking so the best chunks come first, deduplicating parents, and, for long-context models, testing whether *more* context actually helps (it often doesn't). Also watch for silent truncation, such as Ollama's default `num_ctx`.
 3. *"Local LLM vs. API LLM: how do you decide?"*
-   → Privacy and data residency, cost at your volume, latency, the quality bar (my 7B vs. Claude on the same retrieval: 📌 vs. 📌 correct), operations (GPU serving with vLLM vs. a managed API). Often the answer is a hybrid: local for cheap steps, the API for the hard ones.
+   → Privacy and data residency, cost at your volume, latency, the quality bar (my local 1.5B scored 0.31 numeric match on 30 questions; the 7B/Claude comparison is one env var away, `LLM=claude-opus`, but I haven't run it: no paid usage), operations (GPU serving with vLLM vs. a managed API). Often the answer is a hybrid: local for cheap steps, the API for the hard ones.
 4. *"How do you make the LLM do arithmetic correctly?"*
    → Ask it to show the formula with cited inputs. Better still, extract the numbers and compute them in Python (a tool call or calculator). Verify with the numeric-match metric.
 5. *"Your small model wouldn't cite. What did you do?"*
@@ -372,11 +373,11 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 
 **Most-asked questions**
 1. *"When would you use agentic RAG instead of a fixed pipeline?"*
-   → For multi-hop or open-ended questions where you can't know the retrieval plan in advance. For simple lookups a fixed pipeline is cheaper, faster and easier to test. My MultiHop-RAG result: 📌.
+   → For multi-hop or open-ended questions where you can't know the retrieval plan in advance. For simple lookups a fixed pipeline is cheaper, faster and easier to test. My MultiHop-RAG result: the loader and the agentic-vs-baseline harness are built (`make multihop`), but not run yet; with a 1.5B model the agent loop is slow and weak.
 2. *"Does HyDE always help?"*
-   → No. It helps when there is a big vocabulary gap between questions and documents, and hurts when the generated answer adds wrong specifics. My result: 📌. Always A/B test it.
+   → No. It helps when there is a big vocabulary gap between questions and documents, and hurts when the generated answer adds wrong specifics. My result: not measured yet. The harness is ready (`make eval-advanced`), but with a 1.5B helper model the transforms are slow. Contextual headers, a cheaper fix for the same vocabulary gap, gave +6 pts. Always A/B test it.
 3. *"What is contextual retrieval?"*
-   → A technique Anthropic published: before indexing, add a short, document-aware context to each chunk, for both the embeddings and BM25. My cheap version (a metadata header) gave 📌; the LLM-written version costs one LLM call per chunk at ingest time.
+   → A technique Anthropic published: before indexing, add a short, document-aware context to each chunk, for both the embeddings and BM25. My cheap version (a metadata header, embeddings only) gave hit@10 0.613 → 0.673 on 150 questions; the LLM-written version costs one LLM call per chunk at ingest time.
 4. *"How do you keep advanced techniques from blowing up latency and cost?"*
    → Route by query type (a classifier or rules), run the extra steps only when the first pass is weak (the CRAG idea), cache LLM outputs, use small models for the helper steps, and stream the final answer.
 5. *"Re-running your evaluation was slow and gave different numbers each time. What was wrong?"*
@@ -403,7 +404,7 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 2. *"How do you know your LLM judge is reliable?"*
    → Hand-label a sample, measure agreement or Cohen's kappa, use a judge from a different model or provider than the generator, give it a clear rubric with JSON output, and vary the answer order to check for position bias.
 3. *"What did your failure analysis show?"*
-   → 📌 Your top 3 failure categories (for example: the right doc but a neighbouring page, a table that was split, a wrong fiscal year) and what you changed because of them. **Have one concrete story ready.**
+   → My top 3: (1) **right filing, wrong page**: doc_hit@10 0.99 but hit@10 0.61. Near-identical pages inside a 300-page 10-K. Contextual headers gave +6 pts. (2) **wrong line item**: the 1.5B model found the right page but computed from the wrong row (e.g. used Total Debt for net PP&E), so the model is now the bottleneck (gold page retrieved 0.47, numeric match 0.31). (3) **over-abstaining**: 27% abstentions on answerable questions. **Story:** the vocabulary gap ("capex" vs "purchases of property, plant and equipment": the gold page ranked 36th) led to filters, then contextual headers.
 4. *"How do you evaluate in production without labels?"*
    → Faithfulness scored on a sample of traffic, user thumbs up or down, how often citations are clicked, retrieval-score drift, abstain-rate drift, and turning failures into new eval cases.
 
@@ -461,7 +462,7 @@ Practice answering each in two sentences or fewer.
 9. **What's a semantic cache?** It returns a cached answer when a new query's embedding is close to a past one. Risk: a near-duplicate question with a different meaning (for example, a different year).
 10. **What's HyDE?** Embedding a hypothetical answer instead of the query.
 11. **What's GraphRAG?** Extract entities and relations into a graph, then retrieve along graph paths and community summaries. Good for "global" questions.
-12. **How do you choose top-k for the context?** By recall at k against cost and noise, measured. Mine: 📌.
+12. **How do you choose top-k for the context?** By recall at k against cost and noise, measured. Mine: 10 blocks. hit@5 0.53 → hit@10 0.61 on the best config, and 10 blocks fit in ~3.9k prompt tokens for a small model.
 13. **What's query routing?** Classify the query, then pick the pipeline, index or model.
 14. **How do you keep the index fresh?** Incremental upserts with deterministic IDs, delete old versions, and reindex in the background.
 15. **What is embedding drift?** A new model's vectors are incompatible with the old ones, so re-embed into a new collection and switch atomically.
@@ -499,11 +500,11 @@ Use the **STAR** format (Situation, Task, Action, Result), with real numbers.
 
 | Question | Story from this project |
 |---|---|
-| A technical decision you made with data | Choosing the chunker and filter policy from the ablation (📌 numbers), and rejecting the hard year filter because 10-Ks contain prior-year data |
-| A bug you found that others would miss | 📌 for example, the 0-based page index, silent truncation at 512 tokens, or Ollama `num_ctx` truncation |
+| A technical decision you made with data | Choosing the chunker and filter policy from the 150-question ablation: the company filter took doc_hit from 0.83 to 0.99, and the year filter added +4–14 pts. I had expected to reject the year filter (10-Ks contain prior-year data), but the data said otherwise, so I kept it. I dropped hybrid + rerank (0.58 vs 0.61, 25× slower) |
+| A bug you found that others would miss | The 5-user load test crashed the API: the SQLite caches were bound to one thread, and FastAPI uses a thread pool. Unit tests with fakes passed; only a load test found it. Also: re-runs gave different rankings because Apple MPS floats wobble, which I fixed by caching query vectors and rerank scores (19 s → 0.1 s, byte-identical) |
 | Balancing quality vs. cost | Reranker depth vs. latency; Haiku as judge; local by default |
 | Learning something fast | Tutorial experiment → production rebuild in N weeks; reading the papers behind RRF, HyDE and CRAG |
-| Something that didn't work | 📌 a technique that didn't help (HyDE or semantic chunking?) and why you dropped it. Interviewers value this. |
+| Something that didn't work | (1) Hybrid BM25 + dense without filters scored *worse* than dense alone (0.32 vs 0.46): FinanceBench questions are full of boilerplate instructions. (2) The local LLM judge rated 90/90 answers correct. (3) The local LLM in Docker on a Mac: OOM in fp32, >15 min per answer in bf16, so I run it as a separate process instead |
 
 ---
 
@@ -536,7 +537,7 @@ Prioritized for GenAI and AI-engineer interviews. Tick them off as you go.
 - ❌ "I used LangChain and it just worked." ✅ Explain each stage and show its metric.
 - ❌ Quoting public leaderboard numbers as if they were yours. ✅ "On *my* eval set, I measured…"
 - ❌ Saying "chunk size 512 is best" as a rule. ✅ "On this data, measured, the trade-off was…"
-- ❌ Claiming that hallucination is solved. ✅ "It's reduced and measured: faithfulness 📌, plus abstention."
+- ❌ Claiming that hallucination is solved. ✅ "It's reduced and measured: answers must cite a page (citation checks plus auto-cite repair), off-topic questions abstain, and numeric match is 0.31 with a 1.5B model. Faithfulness scoring needs a validated judge, which is the next step."
 - ❌ No failure stories. ✅ Have two things that didn't work and what you learned.
 - ❌ Overstating scale. ✅ Be honest: "laptop-scale; here's what changes at 10M documents."
 
@@ -544,7 +545,7 @@ Prioritized for GenAI and AI-engineer interviews. Tick them off as you go.
 
 ## 9. Final-week checklist
 
-- [ ] Every 📌 is filled in with real numbers and linked to `results/`
+- [x] Every 📌 is filled in with real numbers and linked to `results/` (where a number wasn't measured, the guide says so)
 - [ ] I can draw the architecture from memory in 2 minutes
 - [ ] I can do the live demo offline (Ollama running, indexes built, 5 preset questions)
 - [ ] I can explain BM25, RRF, cross-encoders, HNSW, NDCG and LLM-as-judge without notes

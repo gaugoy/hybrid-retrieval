@@ -3,6 +3,24 @@
 Every measured comparison in the project, newest phase last. Each table links to the committed report it came from.
 Numbers are on the FinanceBench open-source sample (150 questions, 189 evidence items, 84 filings, 12,013 pages).
 
+## Methodology
+
+- **Ground truth is page-level.** FinanceBench gives each question's evidence as (filing, page). A retrieved chunk is
+  *relevant* when it comes from the same filing and its page span contains an evidence page. Chunks never span a filing.
+- **Retrieval metrics** (`finsight.evaluation.retrieval_metrics`): hit@k (any relevant chunk in the top k), recall@k
+  (share of evidence pages covered), MRR, nDCG@k, and doc_hit@k (right filing in the top k, which separates "wrong
+  document" from "wrong page"). Reported as the mean ± std over questions. **The standard error is std/√n ≈ ±0.04 at
+  n = 150**, so differences under ~0.05 are treated as noise.
+- **Answer metrics** (P8): numeric match (a number in the answer within 1% of the gold's first number; 87/90 rows are
+  numeric), gold page retrieved, abstention rate, citation presence, and latency/tokens/cost. An LLM judge is wired in,
+  but it only counts once it agrees with human labels (`scripts/10b_label_judge_sample.py`). The local judge didn't
+  (90/90 "correct"), so it isn't used.
+- **Reproducibility.** Every report directory stores the experiment `config.yaml` and the **config fingerprint**.
+  Query vectors and rerank scores are cached, so re-runs are byte-identical even on Apple MPS (P7 fix). Every experiment
+  is a YAML file in `configs/experiments/`, run with `uv run finsight eval --experiment <yaml> [--limit N]`.
+- **What's not claimed.** No paid models were run. Query transforms (P7) and MultiHop-RAG weren't evaluated to
+  completion. Docker serving wasn't measured (the app runs as local processes).
+
 ## P2 — Parsing quality
 
 Source: `scripts/03_parse_pdfs.py`, details in [`data_card.md`](data_card.md#parsing-results-p2-scripts03_parse_pdfspy).
@@ -202,3 +220,16 @@ n = 30, so the standard error of a 0/1 rate is about ±0.08: only the naive → 
   `numeric_match` until a stronger judge from a different model family (e.g. `JUDGE=claude-haiku` or a free-tier Gemini) is
   configured and validated against human labels (`scripts/10b_label_judge_sample.py`, 20 labels). Human validation: **not done yet**.
 - **Cost:** $0 (local). The token counts give the paid-model estimate once prices are set in `configs/llms.yaml`.
+
+## P9/P10 — Serving (`results/2026-11-25_load_test/`)
+
+The local API process (`make serve`, no Docker), local Qwen2.5-1.5B, distinct FinanceBench questions:
+
+| pass | users | p50 s | p95 s | throughput (req/min) | errors |
+|---|---|---|---|---|---|
+| sequential | 1 | 2.50 | 7.83 | 17.6 | 0 |
+| concurrent | 5 | 14.36 | 20.49 | 17.1 | 0 |
+| answer cache hit | 5 | 0.01 | 0.01 | n/a | 0 |
+
+Streaming time to first token: ~1.5 s. Throughput is flat with concurrency: one local model generates one answer at
+a time. The P9 run also found and fixed a concurrency bug (thread-bound SQLite caches).

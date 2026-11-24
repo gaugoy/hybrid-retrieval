@@ -1091,8 +1091,8 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 - Tag `v1.0`
 
 **Done when**
-- [ ] A friend or colleague follows the README from a fresh clone without help
-- [ ] Every number in the README links to a `results/` report
+- [ ] A friend or colleague follows the README from a fresh clone without help. **Pending: needs a person.** The Quickstart is 5 commands, each verified on this machine during P4–P10
+- [x] Every number in the README links to a `results/` report (parsing → `docs/data_card.md`; the load test was saved as `results/2026-11-25_load_test/`)
 
 ---
 
@@ -1113,7 +1113,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P8 Evaluation | ✅ done (judge human-validation pending) | 2026-11-24 | 30 Q, local 1.5B: numeric match naive 0.24 / **baseline 0.31** / corrective 0.28 · gold page 0.17 / 0.47 / 0.47 · p50 3.8 / 4.8 / 12.8 s · $0 · **local judge rated 90/90 correct (63 disagree with numeric match) → not trusted** · regression gate hit@5 ≥ 0.60 in CI · 198 tests |
 | P9 Serving | ✅ done (demo GIF pending) | 2026-11-24 | FastAPI: /health, /ready, /v1/config, /v1/query, /v1/query/stream (SSE) · Streamlit UI (thin API client) · local 1.5B: **1 user p50 4.3 s / p95 4.9 s; 5 users p50 17.3 s / p95 20.4 s, same throughput** (one GPU model = one request at a time) · time to first token 1.5 s · **bug found by load test: SQLite caches were bound to one thread → fixed with locks** · 212 tests |
 | P10 Production | ✅ done (Docker answers not verified) | 2026-11-25 | fallbacks: dense→BM25 (`dense_failed`), LLM chain (`llm_fallback`), reranker→RRF · answer cache keyed by the config fingerprint (hit 0.01 s; degraded answers never cached) · load test 1 user p50 2.5 s, 5 users p50 14.4 s, 0 errors · Docker: image + Qdrant server + healthy API verified, **LLM in Docker too heavy on a Mac** (OOM in fp32, >15 min in bf16) → Ollama on the host · runbook + 4 ADRs · `finsight serve` · 221 tests |
-| P11 Docs | ⬜ | | |
+| P11 Docs | ✅ done (fresh-clone test by a person pending) | 2026-11-25 | README rewritten (pitch → problem → diagram → results table with report links → 5-command quickstart → ADRs → limitations → next steps) · `docs/architecture.md` (Mermaid: processes, indexing, `/v1/query` sequence) · evaluation methodology · every interview 📌 filled (or marked not measured) · parent README section · tag `v1.0` |
 
 Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" boxes ticked)
 
@@ -1145,8 +1145,9 @@ embedder). For real concurrency use an inference server that batches (Ollama/vLL
 **P10:** done on `feat/p10-production`. **The app runs without Docker** (user decision): `ollama serve` (optional) + `make serve` + `make ui`,
 each in its own terminal (runbook §1). Docker files are optional and unused: running the LLM in Docker saturated this Mac's CPU and memory.
 
-**P11:** not started (final README, architecture diagram, fill the remaining 📌, tag v1.0). Still open from earlier phases:
-the human judge labels (P8), paid-model prices (P8), the demo GIF (P9), and the query-transform eval (P7).
+**P11:** done on `feat/p11-docs`, tagged `v1.0`. All phases are built. Open items (none blocks use): the human judge labels (P8),
+paid-model prices (P8), the demo GIF (P9), the query-transform + MultiHop-RAG runs (P7), and a fresh-clone test by another person (P11).
+Merge order on GitHub: P4 → P5 → … → P11 (each branch builds on the previous one).
 
 ---
 
