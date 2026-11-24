@@ -17,6 +17,10 @@ from typing import Any
 from finsight.config import LLMCfg
 from finsight.generation.llm.base import LLM, LLMResponse
 
+# One generation at a time per process: a single local model on one GPU (MPS) is not safe to
+# call from several threads at once, and the API serves requests from a thread pool.
+_GPU_LOCK = threading.Lock()
+
 
 class HFLocalLLM(LLM):
     provider = "hf"
@@ -54,11 +58,11 @@ class HFLocalLLM(LLM):
     ) -> LLMResponse:
         import torch
 
-        tok, model, _ = self._loaded
         if json_mode:
             system += "\n\nRespond with a single JSON object and nothing else."
-        inputs = self._inputs(system, messages, max_tokens)
-        with torch.inference_mode():
+        with _GPU_LOCK, torch.inference_mode():
+            tok, model, _ = self._loaded
+            inputs = self._inputs(system, messages, max_tokens)
             out = model.generate(
                 **inputs, max_new_tokens=max_tokens, do_sample=False, pad_token_id=tok.eos_token_id
             )
@@ -75,14 +79,21 @@ class HFLocalLLM(LLM):
     def stream(self, system: str, messages: list[dict], max_tokens: int = 1024) -> Iterator[str]:
         from transformers import TextIteratorStreamer
 
-        tok, model, _ = self._loaded
+        with _GPU_LOCK:
+            tok, model, _ = self._loaded
+            inputs = self._inputs(system, messages, max_tokens)
         streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True)
         kwargs = {
-            **self._inputs(system, messages, max_tokens),
+            **inputs,
             "max_new_tokens": max_tokens,
             "do_sample": False,
             "streamer": streamer,
             "pad_token_id": tok.eos_token_id,
         }
-        threading.Thread(target=model.generate, kwargs=kwargs, daemon=True).start()
+
+        def run() -> None:
+            with _GPU_LOCK:
+                model.generate(**kwargs)
+
+        threading.Thread(target=run, daemon=True).start()
         yield from streamer

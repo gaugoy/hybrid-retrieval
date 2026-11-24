@@ -422,7 +422,7 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 2. *"Health vs. readiness?"* → Health means the process is alive (restart it if not). Ready means it can serve, with indexes loaded and dependencies reachable (keep it out of the load balancer until it is). Kubernetes uses both.
 3. *"Sync or async FastAPI here?"* → Model inference is CPU/GPU-bound, so run it in a threadpool or separate worker processes. The external LLM calls are I/O-bound, so async helps there. Don't block the event loop.
 
-**📌 Your numbers:** p50/p95 latency 📌 at 5 concurrent users · time to first token 📌
+**📌 Your numbers (P9, local Qwen2.5-1.5B on an M5):** 1 user p50 **4.3 s** / p95 4.9 s · 5 concurrent users p50 **17.3 s** / p95 20.4 s with the **same total throughput** (10 requests in 35 s either way), because one local model on one GPU serves one request at a time · time to first token **1.5 s** with SSE streaming vs ~1.8 s for the whole short answer. **Story:** the 5-user load test crashed the server. The SQLite caches I added in P7 were bound to the thread that opened them, and FastAPI runs sync endpoints in a thread pool. I fixed it with shared connections plus a lock, a process-wide lock for the GPU models, and a regression test. Unit tests with fakes didn't catch it; a load test did.
 
 **Go deeper:** [FastAPI concurrency](https://fastapi.tiangolo.com/async/) · [SSE (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
 

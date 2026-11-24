@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,28 +41,31 @@ class EmbeddingCache:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path)
+        # check_same_thread=False + a lock: the API serves requests from a thread pool
+        self._db = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.Lock()
         self._db.execute("CREATE TABLE IF NOT EXISTS emb (key TEXT PRIMARY KEY, vec BLOB)")
 
     def get_many(self, keys: list[str]) -> dict[str, np.ndarray]:
         out: dict[str, np.ndarray] = {}
         for i in range(0, len(keys), _SQL_BATCH):
             part = keys[i : i + _SQL_BATCH]
-            rows = self._db.execute(
-                f"SELECT key, vec FROM emb WHERE key IN ({','.join('?' * len(part))})", part
-            )
+            with self._lock:
+                rows = self._db.execute(
+                    f"SELECT key, vec FROM emb WHERE key IN ({','.join('?' * len(part))})", part
+                ).fetchall()
             out.update({k: np.frombuffer(v, dtype=np.float32) for k, v in rows})
         return out
 
     def put_many(self, items: dict[str, np.ndarray]) -> None:
-        self._db.executemany(
-            "INSERT OR REPLACE INTO emb (key, vec) VALUES (?, ?)",
-            [(k, np.asarray(v, dtype=np.float32).tobytes()) for k, v in items.items()],
-        )
-        self._db.commit()
+        rows = [(k, np.asarray(v, dtype=np.float32).tobytes()) for k, v in items.items()]
+        with self._lock:
+            self._db.executemany("INSERT OR REPLACE INTO emb (key, vec) VALUES (?, ?)", rows)
+            self._db.commit()
 
     def __len__(self) -> int:
-        return int(self._db.execute("SELECT COUNT(*) FROM emb").fetchone()[0])
+        with self._lock:
+            return int(self._db.execute("SELECT COUNT(*) FROM emb").fetchone()[0])
 
     def close(self) -> None:
         self._db.close()

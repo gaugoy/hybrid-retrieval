@@ -21,6 +21,7 @@ More info: https://sbert.net/ · https://huggingface.co/BAAI/bge-small-en-v1.5
 
 from __future__ import annotations
 
+import threading
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -47,6 +48,9 @@ def resolve_device(device: str) -> str:
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+_ENCODE_LOCK = threading.Lock()  # one encode at a time: the API calls from a thread pool
 
 
 class SentenceTransformerEmbedder(Embedder):
@@ -112,6 +116,10 @@ class SentenceTransformerEmbedder(Embedder):
         return np.asarray(vecs, dtype=np.float32)
 
     def _encode(self, texts: list[str]) -> np.ndarray:
+        with _ENCODE_LOCK:
+            return self._encode_unlocked(texts)
+
+    def _encode_unlocked(self, texts: list[str]) -> np.ndarray:
         vecs = self.model.encode(
             texts,
             batch_size=self.batch_size,

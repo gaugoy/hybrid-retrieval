@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P8 (end-to-end evaluation) complete**; P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
+> Status: **P9 (serving) complete**: FastAPI (`make serve`, docs at http://127.0.0.1:8000/docs) with SSE streaming, plus a Streamlit demo UI (`make ui`) that shows the cited answer and what each retrieval stage did. P8 (end-to-end evaluation) and P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
 > **P8 (end-to-end eval):** on 30 FinanceBench questions with the local 1.5B model: numeric answer match **0.31** (filtered baseline) vs 0.24 naive; gold page retrieved 0.47 vs 0.17; $0. CI regression gate on retrieval. The local LLM judge proved unreliable (90/90 "correct") and isn't used as a metric ([`docs/evaluation.md`](docs/evaluation.md#p8--end-to-end-answer-quality-30-questions-local-qwen251-5b-results2026-11-24_end_to_end)).
 > A demo arrives in P9.
 
@@ -40,6 +40,9 @@ uv run python scripts/07_eval_retrieval.py      # step 07: the retrieval ablatio
 uv run python scripts/08_generate.py --show-prompt   # step 08: a cited answer, the exact prompt, timings
 uv run finsight query "What was 3M's FY2018 capex?"  # the same from the CLI (finsight llms: which LLM)
 uv run python scripts/09_advanced_rag.py --technique multi_query   # step 09: query rewriting / corrective / agentic
+uv run python scripts/10_eval_end_to_end.py --limit 30            # step 10: end-to-end answer quality
+make serve   # API on :8000      then, in another terminal:
+make ui      # demo UI on :8501  ·  uv run python scripts/11_smoke_api.py  (step 11)
 ```
 
 ### Choosing the embedding model (local or online)
@@ -69,7 +72,8 @@ Further steps are added phase by phase. `make ingest` parses and chunks on all c
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, container, CLI, data, ingestion, chunking, embedding, indexing
-scripts/          cell-based learning steps (00_check_env … 09_advanced_rag)
+scripts/          cell-based learning steps (00_check_env … 11_smoke_api)
+ui/               Streamlit demo UI (a thin client of the API)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit, integration (fake models) and slow (real data/models) tests
 docs/             spec, development guide, interview guide
