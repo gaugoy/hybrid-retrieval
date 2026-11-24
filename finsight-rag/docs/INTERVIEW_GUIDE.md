@@ -207,23 +207,78 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 - **Query instruction:** bge v1.5 expects queries prefixed with "Represent this sentence for searching relevant passages: ". Asymmetric retrieval treats questions and passages differently.
 - **ANN / HNSW:** a graph index with layers. Search walks it greedily, giving roughly logarithmic search time, with a recall/speed trade-off controlled by `ef` and `M`. Exact search is fine at small scale; ANN matters at millions of vectors.
 - **Payload filtering:** Qdrant applies metadata filters *during* the vector search, rather than filtering afterwards and ending up with fewer than k results.
+- **Sparse vs dense:** BM25 scores exact word overlap (weighted by rarity, saturated by term frequency, normalized by length); dense vectors score meaning. They fail on different questions, which is why P5 fuses them.
 - **Idempotent indexing:** a manifest of hashes means re-runs skip unchanged work, and an embedding cache means re-chunking only embeds new text.
 
+**What this project uses, and why** (say this in one breath)
+
+> "**bge-small-en-v1.5 on the Apple GPU, normalized vectors in Qdrant with the full chunk as payload, plus a BM25 index over the same text. Both are idempotent: a manifest skips unchanged work and a SQLite cache means no text is embedded twice.**"
+
+| Choice | Why (the reason you give) |
+|---|---|
+| **bge-small-en-v1.5** (384 dims, 33M params) | Strong on MTEB retrieval for its size, runs at **106 chunks/s** on a laptop GPU, 512-token limit fits the chunks. bge-base / larger models are a measured upgrade in P5, not a guess. |
+| **L2-normalized vectors, COSINE** | Cosine = dot product, so scores are comparable across queries, and any distance setting ranks the same. |
+| **Query instruction on queries only** | It's how bge v1.5 was trained for short queries. Configurable, because on our first test question it *hurt* (rank 36 → 47); P5 measures it on all 150. |
+| **Qdrant** | Filters applied during search, the same API embedded (no Docker for dev) and as a server (production), sparse-vector support if needed later. |
+| **Full chunk as payload** | A search hit is a complete, citable chunk (text, doc, page, company) with no second lookup. Costs disk (244 MB for 31k chunks). |
+| **uuid5(chunk_id) as point id** | Qdrant needs int/UUID ids; uuid5 is deterministic, so re-indexing a chunk overwrites it instead of duplicating it. |
+| **BM25 (bm25s) beside the vectors** | Exact words (tickers, line items, years) that embeddings blur. 1.9 s to build, 25 MB. |
+| **Manifest + embedding cache** | Rebuild only when chunk content, model or index code changed. Re-run: 0.07 s. A forced rebuild takes the vectors from the cache. |
+| **Pluggable embedders (local + online), chosen by a preset** | `EMBEDDER=gemini-001` swaps in Google's model; Mistral, Cohere, Jina, Voyage, Ollama and OpenAI are one line away. Same chunks, separate collections, so any two can be compared fairly. |
+| **Client-side rate limits + a paid guard** | Free tiers only: requests are paced to RPM/TPM, daily/monthly caps are tracked on disk, quota 429s stop cleanly, and paid-only providers are refused unless explicitly allowed. |
+
+**Benefits**
+- **Laptop-scale, production-shaped:** the same code talks to embedded Qdrant (dev) and a Qdrant server (prod) by changing one URL.
+- **Cheap experiments:** every chunking config gets its own collection and BM25 folder, so P5 compares 4 chunkers without rebuilding anything.
+- **Reproducible:** the manifest records chunk hash, model, dimensions and config fingerprint for every index.
+- **Testable without models:** a hash-based `FakeEmbedder` runs the whole index → search → filter path in CI in under a second.
+- **Vendor-neutral and zero-spend:** comparing a hosted model is a config change, costs nothing on free tiers, and survives rate limits and daily caps (the cache resumes the run).
+
 **Most-asked questions**
-1. *"How do you choose an embedding model?"*
-   → Start from the MTEB retrieval leaderboard, filtered by size, latency and license. Then **evaluate on my own data**, because leaderboard rank doesn't transfer reliably between domains. I chose bge-small for speed on a laptop and its 384 dimensions; bge-base is the next experiment. Also consider the max sequence length, multilingual needs and domain fit.
-2. *"Which vector DB, and why?"*
+1. *"Which embedding model did you use and why?"*
+   → bge-small-en-v1.5: good retrieval quality for 33M parameters, 384 dims, 512-token limit, MIT license, fast on Apple's GPU (106 chunks/s, 31k chunks in under 5 minutes). I start small, measure Recall@k, and only upgrade if the gain is worth the cost.
+2. *"How do you choose an embedding model?"*
+   → Start from the MTEB retrieval leaderboard, filtered by size, latency and license. Then **evaluate on my own data**, because leaderboard rank doesn't transfer reliably between domains. Also consider the max sequence length, multilingual needs and domain fit.
+3. *"Which vector DB, and why?"*
    → Qdrant: payload filtering during search, local and server modes with the same API, it runs in Docker, and it supports sparse vectors if needed. Alternatives: pgvector (when you already run Postgres and the scale is moderate), Elasticsearch or OpenSearch (when you want BM25 and vectors in one system), Pinecone (managed), FAISS (a library, not a database).
-3. *"Explain HNSW."*
-   → A multi-layer proximity graph: the top layers are sparse long-range links, the bottom layer is dense. Search starts at the top and greedily descends toward the query. `M` sets the links per node (memory vs. recall); `ef_search` sets the size of the candidate list (latency vs. recall).
-4. *"How do you update the index when documents change?"*
+4. *"Explain HNSW."*
+   → A multi-layer proximity graph: the top layers are sparse long-range links, the bottom layer is dense. Search starts at the top and greedily descends toward the query. `M` sets the links per node (memory vs. recall); `ef_search` sets the size of the candidate list (latency vs. recall). (Embedded Qdrant searches by brute force, which is exact and fast enough at 31k vectors.)
+5. *"Why normalize embeddings?"*
+   → With unit vectors, cosine similarity equals the dot product, so scores are comparable and any distance metric gives the same ranking. Mixing normalized and unnormalized vectors silently breaks ranking.
+6. *"Why keep BM25 if you have embeddings?"*
+   → They fail differently. Embeddings blur exact tokens (tickers, years, line-item names); BM25 can't handle synonyms. In my data, BM25 ranks the 3M capex page **2nd** with the filing's wording but misses it with the question's wording; dense is the reverse. Fusion (P5) gets the best of both.
+7. *"How do you update the index when documents change?"*
    → Use deterministic chunk IDs (`doc::page::seq`) and UUIDs derived from them. Upsert the changed docs, and delete chunks whose doc version changed. The manifest tracks the hashes. Re-embedding the whole corpus is only needed when the embedding model changes (a new collection, a blue/green switch).
-5. *"What about embedding dimension and cost?"*
-   → Memory is roughly n × dim × 4 bytes for float32, before the index overhead. Options to shrink it: smaller dimensions, Matryoshka embeddings, scalar or product quantization.
+8. *"How do you avoid paying to re-embed?"*
+   → A content-addressed cache: key = sha256(model + text). Re-chunking or a forced rebuild only embeds texts never seen before. It also de-duplicates (239 of my chunks repeat another chunk's text).
+9. *"How do metadata filters work with vector search?"*
+   → Pre-filtering during the search (Qdrant): every result matches and you still get k. Post-filtering (search, then drop) can return fewer than k, or zero for a small company. For BM25 I pass a document mask before ranking for the same reason. In my test the company filter moved the gold page from rank 36 to 14.
+10. *"What about embedding dimension and cost?"*
+    → Memory is roughly n × dim × 4 bytes for float32, before the index overhead: 31k × 384 × 4 ≈ 48 MB here; the rest of the 244 MB is payload. Options to shrink it: smaller dimensions, Matryoshka embeddings, scalar or product quantization.
+11. *"How would this scale to 10 million chunks?"*
+    → A Qdrant cluster with HNSW and payload indexes, scalar quantization (4× smaller), vectors on disk with the HNSW graph in RAM, sharding by tenant/company, and embedding as a batch job on GPUs with the same cache. BM25 moves to OpenSearch or Qdrant sparse vectors.
+12. *"Local or hosted embedding model?"*
+    → Measure both on your own data, same chunks. Local: free, private, no rate limits, predictable latency, but you host it. Hosted: often stronger and bigger context, but per-token cost, rate limits, data leaves your network, and the vendor can deprecate the model (re-embed everything). My code makes it a config switch (`EMBEDDER=gemini-001`) and a one-command comparison, so the decision is a table, not an opinion.
+13. *"How do you deal with rate limits and quotas?"*
+    → On the client: pace requests (60/RPM apart), a sliding token window for TPM, daily/monthly counters persisted to disk and checked *before* sending. On the server's 429: honour `Retry-After`, else exponential backoff; but a *daily-quota* 429 stops the run instead of retrying for hours. Everything is cached per batch, so a stopped run resumes. Subtle bug avoided: Google's per-minute 429 also says "exceeded your current quota … billing", so only explicit per-day/per-month wording means stop.
+14. *"How do you make sure an experiment never costs money?"*
+    → Paid-only providers are refused unless `allow_paid` is set, a `max_tokens_per_run` budget is checked before every request, the catalog estimates requests/time/cost before a run, and caching means nothing is ever sent twice (query vectors included).
+15. *"How do you compare embedders fairly?"*
+    → One variable at a time: identical chunks (sized with one tokenizer regardless of the model), same questions, dense-only search with no filter or reranker, same metrics (hit@k, recall@k, MRR, nDCG, doc-hit). Report n and treat small differences on 30 questions as suggestive. Use the model's documented query/document formats (bge instruction, Gemini 2 task prefixes, Cohere input types), or you're testing the wrong thing.
+16. *"Your retrieval missed the gold page. Why?"*
+    → Vocabulary mismatch: the question says "capital expenditure", the statement says "Purchases of property, plant and equipment". Dense ranks it 36th, BM25 121st. Fixes, in order: hybrid fusion, company filter, cross-encoder reranking (P5), then query rewriting or HyDE (P7), measured on all 150 questions.
 
-**📌 Your numbers:** chunks indexed 📌 · embedding throughput 📌 chunks/s on M5 · index size 📌 MB · effect of the query instruction 📌
+**📌 Your numbers (P4b, embedder comparison):** dense-only, 150 questions: hit@10 **0.46**, MRR 0.23, doc_hit@10 **0.89** (right filing, wrong page is the main failure) · query instruction: +0.7 pt (150 Q), +6.7 pt (30 Q) · bge-base vs bge-small on 30 questions: hit@10 0.50 vs 0.43 at 3.6× embedding time · online presets: Gemini, Mistral, Cohere, Jina, Voyage (free tiers), OpenAI (paid, blocked) · online vs local result 📌 (add a free key)
 
-**Go deeper:** [Sentence-BERT](https://arxiv.org/abs/1908.10084) · [HNSW paper](https://arxiv.org/abs/1603.09320) · [Qdrant filtering](https://qdrant.tech/documentation/concepts/filtering/) · [MTEB](https://huggingface.co/spaces/mteb/leaderboard) · study **product quantization and IVF** and **Matryoshka embeddings** (§7)
+**📌 Your numbers (P4, `docs/evaluation.md`):** 31,114 chunks indexed in **5 min 6 s** on M5 · **106 chunks/s** (bge-small, MPS, batch 64) · Qdrant 244 MB (vectors ~48 MB + payload), BM25 25 MB (27,097 words), cache 66 MB · re-run 0.07 s · gold page for the 3M capex question: dense 36 (14 with company filter), BM25 121 · query instruction on that question: 36 → 47 (worse; all-150 effect 📌 P5)
+
+**Stories worth telling:**
+- *"The cache that never cached."* My first cache check was `if cache:`. The cache class defines `__len__`, so an **empty** cache is falsy, and it silently never stored anything. A unit test that counts model calls caught it (`is not None` fixed it). Lesson: test the *behaviour* (calls avoided), not just the output.
+- *"Measure before you assert."* I wanted the slow test to assert the gold page is in the dense top 20. It isn't (rank 36): the question and the filing use different words. Instead of weakening the test silently, I recorded the ranks per index and wording as the baseline P5 must beat.
+- *"Free tiers, real constraints."* "I wanted to compare hosted embedding models without spending anything. Free tiers allow ~30k tokens/minute and ~1,000 requests/day, and the corpus is 11M tokens: 7 hours for one model. So I built client-side rate limiting with persisted daily counters, a cache that resumes after a quota stop, a 30-question subset (17% of the corpus) for quick comparisons, and a guard that refuses paid-only providers. The comparison is now one command per model."
+- *"Know your tool's limits."* Embedded Qdrant ignores payload indexes, searches by brute force and warns above 20k points. Fine for dev at 31k; I create payload indexes only on a server and documented the production path.
+
+**Go deeper:** [Sentence-BERT](https://arxiv.org/abs/1908.10084) · [BGE / C-Pack](https://arxiv.org/abs/2309.07597) · [HNSW paper](https://arxiv.org/abs/1603.09320) · [Qdrant filtering](https://qdrant.tech/documentation/concepts/filtering/) · [Qdrant quantization](https://qdrant.tech/documentation/guides/quantization/) · [MTEB](https://huggingface.co/spaces/mteb/leaderboard) · [bm25s](https://github.com/xhluca/bm25s) · study **product quantization and IVF** and **Matryoshka embeddings** (§7)
 
 ---
 
@@ -238,21 +293,27 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 
 **Most-asked questions**
 1. *"Why hybrid search? Isn't dense retrieval enough?"*
-   → Show the table: dense 📌, BM25 📌, hybrid 📌. Then give a concrete example query where BM25 found the line item and dense didn't, and the reverse. For context, my FiQA experiment cited public baselines of roughly BM25 ~24 and `text-embedding-3-small` ~31 NDCG@10, with cross-encoder reranking above 40. Quote your own measured numbers first.
+   → My honest answer is a table (page-aware 384, 150 questions, hit@10): dense **0.46**, BM25 **0.15**, hybrid **0.32**, hybrid + company filter 0.45, + year filter **0.52**, + reranker 0.53. Hybrid alone was *worse* than dense: FinanceBench questions are long and instruction-heavy ("Assume you are a public equities analyst…"), so BM25 matches boilerplate words, and RRF gives that weak list equal weight. Hybrid pays off once the filter narrows the corpus to one company, where exact line-item words matter again. The lesson: don't assume hybrid > dense, measure it on your data.
 2. *"Why RRF rather than a weighted score sum?"*
    → The scores live on different scales and distributions, and those change from query to query. RRF needs no calibration, is robust, and k=60 is the standard value. A weighted sum needs normalization (min-max or z-score) and tuning, and can win if it is tuned on held-out data.
 3. *"Bi-encoder vs. cross-encoder?"*
    → A bi-encoder embeds separately: fast and indexable, but coarse. A cross-encoder reads the pair jointly: accurate but O(n) model calls per query. So: bi-encoder for recall, cross-encoder for precision on the top candidates.
 4. *"How many candidates should you rerank?"*
-   → It's a trade-off: more candidates give more recall, but latency grows linearly. I measured top-20/50/100 against latency: 📌. Pick the knee of the curve.
+   → It's a trade-off: more candidates give more recall, but latency grows linearly. I rerank 50 with bge-reranker-base on the Mac GPU: **~2.5 s per question** (p50) versus ~120 ms without it, for +1–12 points hit@10 depending on the chunker. Measure 20/50/100 and pick the knee of the curve; in production, a smaller reranker or an API reranker.
 5. *"Your retrieval is bad. How do you debug it?"*
    → (1) Is the answer in the corpus, and was it parsed? (the evidence check) (2) Is it inside one chunk? (chunk coverage) (3) Does it appear in the top-50 of either retriever? (4) Is it lost at fusion or at reranking? (5) Did a filter remove it? Each stage is logged, so I can tell which one failed.
 6. *"What's the difference between Recall@k and NDCG?"*
    → Recall asks whether it was found; NDCG asks how high it was ranked. For RAG, recall at the context size matters most (the LLM sees all k chunks), but rank still matters because of "lost in the middle".
 7. *"Filtering: before or after the vector search?"*
-   → Filtering during the search (Qdrant's filterable HNSW) avoids getting fewer than k results. Filtering afterwards needs over-fetching. I do that for BM25 (fetch 4k, then filter).
+   → Filtering during the search (Qdrant's filterable HNSW) avoids getting fewer than k results. Filtering afterwards needs over-fetching. For BM25 I pass a document mask before ranking (bm25s `weight_mask`), so it's exact too.
+8. *"Which retrieval setup did you choose and why?"*
+   → Recursive 384-token chunks, **dense** search, company **and** year filters extracted from the question, **no** BM25 and **no** reranker by default: hit@10 **0.613** at ~110 ms. I expected hybrid + rerank to win; the ablation said otherwise: hybrid + both filters + rerank scored 0.580 at ~2.7 s. Inside one company BM25 still adds noise, and bge-reranker-base (512-token window, web-trained) doesn't order financial tables better than the embedding. Both stay one config switch away, and online rerankers (Cohere/Jina/Voyage) are wired in for the next comparison. That's the senior answer: choose by measurement, keep the alternatives cheap to re-test.
+9. *"How do you extract metadata filters, and what if it's wrong?"*
+   → Rules first: company aliases from the document metadata plus a ticker/nickname map (98% of questions get a company), years by regex. If a filter returns nothing, retry without it. A hard year filter is risky (a FY2017 figure often lives in the FY2018 10-K), which is why it's an ablation, not an assumption; here it helped by +4–14 pts. An LLM "self-query" extractor is the upgrade path for messy questions.
+10. *"Your filter improved doc_hit to 99% but hit@10 is only ~55%. What's left?"*
+    → The right filing, wrong page: inside one 300-page 10-K many pages look alike to a small embedder, and the question's wording differs from the filing's ("capex" vs "purchases of PP&E"). Next levers: query rewriting/HyDE (P7), contextual chunk headers, a stronger embedder (bge-base was +7 pts on a subset).
 
-**📌 Your numbers:** the ablation table (copy it here) · rerank latency 📌 ms per 50 candidates · effect of the filter 📌
+**📌 Your numbers (P5, `results/2026-11-24_retrieval_ablation/`):** hit@10 on 150 questions, page-aware 384: dense 0.46 · BM25 0.15 · hybrid 0.32 · +company filter 0.45 (doc_hit 0.83 → **0.99**) · +year filter 0.52 · +rerank 0.53 · hybrid + company/year filter 0.553 (recursive) · rerank cost ~2.5 s/question (p50) vs ~120 ms · company extracted from 98% of questions · dense + company/year filter **0.613** (recursive) vs hybrid + filters + rerank 0.580 at ~25× the latency
 
 **Go deeper:** [RRF paper](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) · [BEIR](https://arxiv.org/abs/2104.08663) · [ColBERT, late interaction](https://arxiv.org/abs/2004.12832) · [SPLADE, learned sparse retrieval](https://arxiv.org/abs/2107.05720) · [SBERT cross-encoders](https://sbert.net/examples/cross_encoder/applications/README.html)
 

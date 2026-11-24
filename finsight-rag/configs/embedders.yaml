@@ -1,0 +1,116 @@
+# Embedding model presets. Pick one with  EMBEDDER=<name>  in .env, or  --embedder <name>  on the
+# CLI / step scripts. List them with key status and cost estimates:  uv run finsight embedders
+#
+# Every preset fills the `embedding:` config section (see EmbeddingCfg in src/finsight/config.py).
+# Anything you set explicitly (FINSIGHT__EMBEDDING__DIMENSIONS=1536, a profile YAML) wins.
+#
+# FREE-TIER NUMBERS CHANGE OFTEN and differ per account. The rate_limit values below are
+# CONSERVATIVE defaults (checked 2026-11-24 from vendor docs and dashboards); confirm yours in the
+# provider's dashboard and lower them if you see 429s. Limits are enforced on the client, usage is
+# persisted per day/month in indexes/usage/, and the embedding cache means an interrupted or
+# quota-stopped run resumes where it stopped (the next day, if needed).
+#
+# Corpus size for planning: page_aware_384 = 31,114 chunks ≈ 11M tokens. A free tier that can't
+# do that in reasonable time is still fine for a comparison on a QUESTION SUBSET
+# (`finsight compare-embedders --limit-questions 30` indexes only those questions' filings).
+
+# ------------------------------------------------------------------ local (free, offline)
+bge-small:
+  provider: local
+  model: BAAI/bge-small-en-v1.5
+  dimensions: 384
+  query_template: "Represent this sentence for searching relevant passages: {text}"
+  notes: "Default. 33M params, ~106 chunks/s on an M-series GPU (MPS). Free, offline."
+
+bge-small-noinstr:
+  # Same document vectors as bge-small (same index, nothing re-embedded): only the query
+  # instruction is removed. Compare the two to measure what the instruction does.
+  provider: local
+  model: BAAI/bge-small-en-v1.5
+  dimensions: 384
+  notes: "bge-small without the query instruction (ablation; reuses the bge-small index)."
+
+bge-base:
+  provider: local
+  model: BAAI/bge-base-en-v1.5
+  dimensions: 768
+  query_template: "Represent this sentence for searching relevant passages: {text}"
+  notes: "110M params, ~3x slower than bge-small. Free, offline."
+
+ollama-nomic:
+  provider: ollama
+  model: nomic-embed-text
+  dimensions: 768
+  query_template: "search_query: {text}"
+  document_template: "search_document: {text}"
+  rate_limit: {max_batch_texts: 32}
+  notes: "Local Ollama server (ollama pull nomic-embed-text). Free, no key. Same API shape as OpenAI."
+
+# ------------------------------------------------------------------ online, free tiers
+gemini-001:
+  provider: gemini
+  model: gemini-embedding-001
+  dimensions: 768                       # 3072 native; MRL truncation, re-normalized client-side
+  document_params: {taskType: RETRIEVAL_DOCUMENT}
+  query_params: {taskType: RETRIEVAL_QUERY}
+  rate_limit: {rpm: 60, tpm: 30000, rpd: 1000, max_batch_texts: 100, max_batch_tokens: 20000}
+  notes: "Free tier (Google AI Studio key: GEMINI_API_KEY). Free-tier TPM makes the full corpus ~6 h; use --limit-questions. Check AI Studio for your limits."
+
+gemini-2:
+  provider: gemini
+  model: gemini-embedding-2
+  dimensions: 768
+  # gemini-embedding-2 has no taskType: the task goes into the text (Google's documented format)
+  query_template: "task: search result | query: {text}"
+  document_template: "title: none | text: {text}"
+  rate_limit: {rpm: 60, tpm: 30000, rpd: 1000, max_batch_texts: 100, max_batch_tokens: 20000}
+  notes: "Free tier (GEMINI_API_KEY). Multimodal, 8,192-token inputs. Same planning as gemini-001."
+
+mistral-embed:
+  provider: mistral
+  model: mistral-embed
+  dimensions: 1024
+  rate_limit: {rpm: 60, tpm: 400000, max_batch_texts: 64, max_batch_tokens: 15000}
+  notes: "Free 'Experiment' plan (MISTRAL_API_KEY): ~1 req/s, high token limits; full corpus ~30 min. Free-plan requests may be used for training (SEC filings are public)."
+
+cohere-v4:
+  provider: cohere
+  model: embed-v4.0
+  dimensions: 1024                      # 256 | 512 | 1024 | 1536
+  document_params: {input_type: search_document}
+  query_params: {input_type: search_query}
+  rate_limit: {rpm: 20, rpmonth: 900, max_batch_texts: 96}
+  notes: "Trial key (COHERE_API_KEY): 1,000 calls/month across ALL endpoints (rerank too), non-commercial. Full corpus ≈ 325 calls."
+
+jina-v3:
+  provider: jina
+  model: jina-embeddings-v3
+  dimensions: 1024
+  document_params: {task: retrieval.passage}
+  query_params: {task: retrieval.query}
+  rate_limit: {rpm: 60, tpm: 90000, max_batch_texts: 64, max_batch_tokens: 8000}
+  notes: "Free key with a one-off token grant (JINA_API_KEY), smaller than the 11M-token corpus: use --limit-questions."
+
+voyage-3.5-lite:
+  provider: voyage
+  model: voyage-3.5-lite
+  dimensions: 1024
+  document_params: {input_type: document}
+  query_params: {input_type: query}
+  rate_limit: {rpm: 3, tpm: 10000, max_batch_texts: 64, max_batch_tokens: 9000}
+  notes: "200M free tokens (VOYAGE_API_KEY), but without a payment method only ~3 RPM / 10K TPM: full corpus ~18 h. Use --limit-questions."
+
+# ------------------------------------------------------------------ online, PAID ONLY (blocked unless allow_paid: true)
+openai-3-small:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 1536
+  rate_limit: {rpm: 500, tpm: 1000000, max_batch_texts: 256, max_batch_tokens: 250000}
+  notes: "Paid only (no free tier): $0.02 / 1M tokens, ≈ $0.22 for the full corpus. Needs embedding.allow_paid: true."
+
+openai-3-large:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
+  rate_limit: {rpm: 500, tpm: 1000000, max_batch_texts: 256, max_batch_tokens: 250000}
+  notes: "Paid only: $0.13 / 1M tokens, ≈ $1.43 for the full corpus. Needs embedding.allow_paid: true."

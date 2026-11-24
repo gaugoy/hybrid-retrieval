@@ -13,7 +13,7 @@ from finsight.errors import ConfigError
 def test_base_and_local_profile_load(project_root: Path) -> None:
     s = load_settings(root=project_root, env={})
     assert s.llm.provider == "ollama"
-    assert s.chunking.strategy == "page_aware"
+    assert s.chunking.strategy == "recursive"
     assert s.config_path == project_root / "configs" / "local.yaml"
 
 

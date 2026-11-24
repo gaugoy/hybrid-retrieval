@@ -113,7 +113,7 @@ def chunk_corpus(
 ) -> ChunkReport:
     """Chunk every document with the configured strategy and save the result."""
     start = time.perf_counter()
-    tokenizer = tokenizer or get_tokenizer(settings.embedding.model)
+    tokenizer = tokenizer or get_tokenizer(settings.chunking.tokenizer)
     out_path = chunks_path(settings)
     report = ChunkReport(name=config_name(settings), path=out_path)
     is_pc = settings.chunking.strategy == "parent_child"
@@ -272,7 +272,7 @@ def run_sweep(
     """Chunk the corpus with each configuration and return one row of statistics per config."""
     from finsight.config import load_settings
 
-    tokenizer = tokenizer or get_tokenizer(settings.embedding.model)
+    tokenizer = tokenizer or get_tokenizer(settings.chunking.tokenizer)
     pages_df = ingest.load_pages_df(settings)
     rows = []
     for overrides in configs or DEFAULT_SWEEP:
@@ -311,7 +311,7 @@ def save_sweep_report(settings: Settings, sweep: pd.DataFrame) -> Path:
     sweep.to_csv(out / "sweep.csv", index=False)
     (out / "report.md").write_text(
         "# Chunking sweep\n\n"
-        f"- Tokenizer: `{settings.embedding.model}` (limit {MAX_EMBED_TOKENS} text tokens)\n"
+        f"- Tokenizer: `{settings.chunking.tokenizer}` (limit {MAX_EMBED_TOKENS} text tokens)\n"
         f"- Overlap: {settings.chunking.overlap_tokens} tokens · carry_table_header: "
         f"{settings.chunking.carry_table_header} · base fingerprint `{settings.fingerprint()}`\n"
         "- `evidence_in_one_chunk`: share of the 189 evidence items that a single chunk "

@@ -145,28 +145,35 @@ def check_ollama(settings: Settings, timeout_s: float = 2.0) -> CheckResult:
 
 
 def check_secrets(settings: Settings) -> list[CheckResult]:
+    """One row per provider key. Missing keys are 'info' unless the config selects that provider."""
+    from finsight.config import API_KEY_ENV
+
     s = settings.secrets
-    needs_anthropic = "anthropic" in (settings.llm.provider, settings.judge.provider)
-    anthropic_status: Status = (
-        "ok" if s.anthropic_api_key else ("fail" if needs_anthropic else "info")
-    )
-    cohere_status: Status = (
-        "ok" if s.cohere_api_key else ("fail" if settings.rerank.provider == "cohere" else "info")
-    )
-    return [
-        CheckResult(
-            "ANTHROPIC_API_KEY",
-            anthropic_status,
-            mask_secret(s.anthropic_api_key),
-            "" if s.anthropic_api_key else "Optional: add to .env to use configs/cloud.yaml",
-        ),
-        CheckResult(
-            "COHERE_API_KEY",
-            cohere_status,
-            mask_secret(s.cohere_api_key),
-            "" if s.cohere_api_key else "Optional: only for the Cohere reranker comparison",
-        ),
-    ]
+    used = {
+        settings.llm.provider,
+        settings.judge.provider,
+        settings.rerank.provider,
+        settings.embedding.provider,
+    }
+    purpose = {
+        "anthropic": "Optional: Claude for generation/judging (configs/cloud.yaml)",
+        "cohere": "Optional: Cohere trial key (embeddings cohere-v4, reranker comparison)",
+        "gemini": "Optional: free Google AI Studio key (EMBEDDER=gemini-001 / gemini-2)",
+        "openai": "Optional, PAID only: OpenAI embeddings (needs allow_paid)",
+        "mistral": "Optional: free Mistral 'Experiment' key (EMBEDDER=mistral-embed)",
+        "jina": "Optional: free Jina key (EMBEDDER=jina-v3)",
+        "voyage": "Optional: free Voyage tokens (EMBEDDER=voyage-3.5-lite)",
+    }
+    results = []
+    for provider, names in API_KEY_ENV.items():
+        key = s.for_provider(provider)
+        status: Status = "ok" if key else ("fail" if provider in used else "info")
+        results.append(
+            CheckResult(
+                " or ".join(names), status, mask_secret(key), "" if key else purpose[provider]
+            )
+        )
+    return results
 
 
 _ICONS = {

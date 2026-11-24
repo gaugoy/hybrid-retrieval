@@ -62,7 +62,7 @@ if P.tokens:
 settings = load_settings(P.config, {"chunking": overrides} if overrides else None)
 configure_logging(settings.logging.level, settings.logging.json_format)
 show(pd.Series(settings.chunking.model_dump(), dtype=object), "Chunking settings")
-tokenizer = get_tokenizer(settings.embedding.model)
+tokenizer = get_tokenizer(settings.chunking.tokenizer)
 pages_df = ip.load_pages_df(settings)
 meta = fb.load_document_meta(settings)[P.doc]
 doc_pages = [Page(**r) for r in pages_df[pages_df["doc_name"] == P.doc].to_dict("records")]

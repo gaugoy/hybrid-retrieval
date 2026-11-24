@@ -30,37 +30,40 @@ ingestion:                      # P2: PDF page → text (see src/finsight/ingest
   min_table_rows: 3              # ≥ 3 multi-cell numeric rows → page.has_table = true
 
 chunking:
-  strategy: page_aware          # fixed | recursive | page_aware | parent_child
+  strategy: recursive           # fixed | recursive | page_aware | parent_child  (P5 winner, docs/evaluation.md)
   chunk_tokens: 384             # ≤ 510: bge accepts 512 tokens incl. 2 special tokens
   overlap_tokens: 64            # tokens repeated between neighbouring chunks
   child_tokens: 200             # parent_child only: the small chunks that get embedded
   parent_tokens: 1500           # parent_child only: the page text the LLM sees
   carry_table_header: true      # repeat a table's column header ("(Millions) | 2018 | 2017") in later chunks
   contextual_headers: false     # P7: prepend "company | doc | page" before embedding
+  tokenizer: BAAI/bge-small-en-v1.5  # sizes are counted in THESE tokens for every embedder (fair comparison)
 
-embedding:
-  model: BAAI/bge-small-en-v1.5
-  device: auto                  # auto | mps | cuda | cpu
-  batch_size: 64
-  query_instruction: "Represent this sentence for searching relevant passages: "
+embedding:                      # P4: the model itself comes from a PRESET in configs/embedders.yaml
+  preset: bge-small             # or in .env: EMBEDDER=gemini-001 (list: uv run finsight embedders)
+  device: auto                  # local models: auto | mps | cuda | cpu
+  batch_size: 64                # local models: texts per forward pass
+  allow_paid: false             # true = allow paid-only providers (OpenAI). Free tiers never need it
+  max_tokens_per_run: null      # hard stop for online providers (estimated tokens per run)
 
 vector_store:
   qdrant_url: null              # null = embedded mode at paths.qdrant_dir; set a URL for Docker/server
 
 retrieval:
-  mode: hybrid                  # dense | sparse | hybrid
+  mode: dense                   # dense | sparse | hybrid  (P5: dense + filters beat hybrid + rerank here)
   candidate_k: 50               # how many candidates each retriever returns before fusion/rerank
   top_k: 10
   rrf_k: 60
   use_metadata_filter: true
-  filter_fields: [company]      # add doc_period to test a hard year filter (ablation)
+  filter_fields: [company, doc_period]  # P5: the year filter added +4–14 pts hit@10
   query_transform: none         # none | multi_query | hyde | decompose
 
 rerank:
-  provider: local               # none | local | cohere
-  model: BAAI/bge-reranker-base
+  provider: none                # none | local | cohere | jina | voyage  (P5: the local reranker didn't help; try online ones)
+  model: BAAI/bge-reranker-base # the local cross-encoder
+  api_model: null               # online rerankers: null = provider default (cohere rerank-v3.5, ...)
   top_n: 8
-  cohere_model: rerank-v4.0-fast
+  on_error: fallback            # reranker down/timeout -> keep the RRF order, mark the answer "degraded"
 
 pipeline: hybrid_rerank         # naive | hybrid_rerank | corrective | agentic
 
