@@ -114,13 +114,20 @@ class IngestionCfg(_Strict):
     min_table_rows: int = Field(3, ge=1)  # rows with ≥2 cells incl. a number → page has_table
 
 
+# bge models accept 512 tokens INCLUDING the 2 special tokens ([CLS], [SEP]): 510 for our text.
+MAX_EMBED_TOKENS = 510
+
+
 class ChunkingCfg(_Strict):
     strategy: Literal["fixed", "recursive", "page_aware", "parent_child"] = "page_aware"
-    chunk_tokens: int = Field(384, gt=0, le=512)
+    chunk_tokens: int = Field(384, gt=0, le=MAX_EMBED_TOKENS)
     overlap_tokens: int = Field(64, ge=0)
-    child_tokens: int = Field(200, gt=0, le=512)
+    child_tokens: int = Field(200, gt=0, le=MAX_EMBED_TOKENS)
     parent_tokens: int = Field(1500, gt=0)
-    contextual_headers: bool = False
+    carry_table_header: bool = (
+        True  # repeat a table's column-header row (the years) in later chunks
+    )
+    contextual_headers: bool = False  # P7: prepend "company | doc | page" to embed_text
 
     @model_validator(mode="after")
     def _overlap_smaller_than_chunk(self) -> ChunkingCfg:

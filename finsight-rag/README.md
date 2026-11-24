@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P2 (ingestion) complete**: 12,013 pages parsed; 189/189 evidence passages found on their gold page. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
+> Status: **P3 (chunking) complete**: 4 strategies × 3 sizes compared ([`docs/evaluation.md`](docs/evaluation.md)); default page-aware, 384 tokens. See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -31,6 +31,7 @@ make test                  # fast test suite
 make data                                   # step 01: download FinanceBench (~166 MB, ~25 s)
 uv run python scripts/02_explore_data.py   # step 02: explore questions, evidence and consistency checks
 uv run python scripts/03_parse_pdfs.py     # step 03: parse PDFs into clean pages + evidence check (~70 s)
+uv run python scripts/04_chunk.py          # step 04: chunk pages (4 strategies), quality stats; --sweep compares all
 ```
 
 ### Run any step three ways
@@ -44,14 +45,14 @@ uv run python scripts/03_parse_pdfs.py     # step 03: parse PDFs into clean page
 
 Each cell runs one internal step and shows the result as a pandas DataFrame.
 
-Further steps are added phase by phase (`make ingest`, `make index`, ...). Dataset details: [`docs/data_card.md`](docs/data_card.md).
+Further steps are added phase by phase. `make ingest` parses and chunks on all cores; `make index` arrives in P4. Dataset details: [`docs/data_card.md`](docs/data_card.md).
 
 ## Project layout (so far)
 
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, errors, container, CLI, observability, diagnostics
-scripts/          cell-based learning steps (00_check_env … 03_parse_pdfs)
+scripts/          cell-based learning steps (00_check_env … 04_chunk)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit tests (more integration tests from P4 on)
 docs/             spec, development guide, interview guide

@@ -31,10 +31,11 @@ ingestion:                      # P2: PDF page → text (see src/finsight/ingest
 
 chunking:
   strategy: page_aware          # fixed | recursive | page_aware | parent_child
-  chunk_tokens: 384             # bge models accept at most 512 tokens; leave room for a context header
-  overlap_tokens: 64
-  child_tokens: 200             # parent_child only
-  parent_tokens: 1500           # parent_child only (what the LLM sees)
+  chunk_tokens: 384             # ≤ 510: bge accepts 512 tokens incl. 2 special tokens
+  overlap_tokens: 64            # tokens repeated between neighbouring chunks
+  child_tokens: 200             # parent_child only: the small chunks that get embedded
+  parent_tokens: 1500           # parent_child only: the page text the LLM sees
+  carry_table_header: true      # repeat a table's column header ("(Millions) | 2018 | 2017") in later chunks
   contextual_headers: false     # P7: prepend "company | doc | page" before embedding
 
 embedding:
