@@ -1,0 +1,4 @@
+{
+  "_note": "Measured 2026-11-24: hybrid + company filter, FakeEmbedder + BM25, 10 frozen questions -> hit@5 0.60. Deterministic, so the gate is the measured value; raise it when retrieval improves, never lower it silently.",
+  "hybrid_hit@5": 0.6
+}

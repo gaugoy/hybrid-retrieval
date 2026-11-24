@@ -72,7 +72,7 @@ multihop: ## P7: download + index MultiHop-RAG, then baseline vs agentic on 50 q
 	uv run finsight sample -c configs/multihop.yaml --pipelines hybrid_rerank,corrective,agentic --n 50
 
 eval: ## P8: end-to-end evaluation
-	uv run python scripts/10_eval_end_to_end.py --experiment configs/experiments/end_to_end.yaml
+	uv run finsight eval --experiment configs/experiments/end_to_end.yaml $(if $(LIMIT),--limit $(LIMIT),)
 
 serve: ## P9: FastAPI dev server on :8000
 	uv run uvicorn finsight.api.main:app --reload --port 8000

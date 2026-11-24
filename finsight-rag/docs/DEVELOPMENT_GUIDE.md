@@ -1143,12 +1143,12 @@ put its numbers in `docs/evaluation.md` (P7) and the P7 📌 line of the intervi
   tests `unit/test_judge.py`, `unit/test_generation_metrics.py`, `integration/test_regression_gate.py`.
 - Done: `LLMCfg.price_in/price_out` (USD per 1M tokens, default 0) and `ApiCfg.rate_limit_per_minute` added to `config.py`.
 - To do, in order:
-  1. `uv run python tools/build_regression_set.py` → `tests/fixtures/regression_set.jsonl` (+ thresholds JSON), then make
-     `test_regression_gate.py` pass (the only failing test right now).
+  1. ✅ Regression gate: `tests/fixtures/regression_set.jsonl` (10 Q × 10 chunks, built by `tools/build_regression_set.py`) +
+     `regression_thresholds.json` (hybrid hit@5 = 0.60 measured, deterministic). 198 tests pass.
   2. Set `price_in`/`price_out` on the paid presets in `configs/llms.yaml` from the providers' current pricing pages. Don't guess:
      a $0 estimate is better than a wrong one. Free tiers and local stay 0.
-  3. Wire `finsight eval` / `make eval` for the end_to_end experiment. Run it on a sample (`--limit 30`, local LLM) and record
-     correct %, faithfulness, abstention, latency, cost.
+  3. ✅ Wired: `finsight eval` runs end-to-end when the experiment has `judge:`/`faithfulness:`; `make eval LIMIT=30`.
+     3 Q × 3 pipelines + judge = ~3 min on the local LLM. A 30-Q run → `results/2026-11-24_end_to_end/`; record its numbers.
   4. Judge validation (script 10b) needs human labels. Until someone labels, document the judge as **unvalidated**.
   5. `make notebooks`, lint/mypy/tests, update §5 P8 "Done when", this tracker row, §7, `evaluation.md`, the interview guide's P8 📌.
 
