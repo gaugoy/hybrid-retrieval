@@ -178,3 +178,27 @@ doc_hit@10 without a filter: 0.913 → 0.973.
 `configs/experiments/advanced.yaml` (`make eval-advanced`) compares them on recursive_384 with the local Qwen2.5-1.5B as the
 helper LLM. **Not measured yet:** the 60-question run was stopped before it finished, because each question needs 1–4 LLM calls
 on CPU/MPS. Run `make eval-advanced` to fill this in. The report adds an "LLM calls/q" column for the cost side.
+
+## P8 — End-to-end answer quality (30 questions, local Qwen2.5-1.5B, `results/2026-11-24_end_to_end/`)
+
+The generator and the judge are both the local `hf-qwen1.5b`: no keys on this machine, and nothing is spent.
+
+| pipeline | numeric match | gold page retrieved | abstained | cited (model) | auto-cited | p50 s | p95 s | tokens/q | $ |
+|---|---|---|---|---|---|---|---|---|---|
+| naive (dense, no filter) | 0.24 | 0.17 | 0.37 | 0.43 | 0.30 | 3.8 | 17.3 | 3,837 | 0 |
+| **baseline** (hybrid_rerank: dense + company/year filter) | **0.31** | **0.47** | 0.27 | 0.57 | 0.43 | 4.8 | 11.2 | 3,817 | 0 |
+| corrective (CRAG) | 0.28 | 0.47 | 0.33 | 0.57 | 0.43 | 12.8 | 50.3 | 3,440 | 0 |
+
+`numeric_match` = a number in the answer within 1% of the gold's first number (87 of the 90 rows have a numeric gold).
+n = 30, so the standard error of a 0/1 rate is about ±0.08: only the naive → baseline gap in retrieval (0.17 → 0.47) is clearly real.
+
+**What it says**
+- **Retrieval drives answer quality.** The filtered baseline finds the gold page about 3× as often as naive and answers more
+  numbers correctly. The 1.5B generator is now the bottleneck: it gets about 0.31 even though the page is found 0.47 of the time.
+- **Corrective RAG didn't pay off here.** It abstained more and cost 2.6× the p50 latency (4.5× the p95) for no accuracy gain. With a 1.5B model,
+  the grader and rewrite steps are as weak as the answerer.
+- **The local judge is unusable.** The 1.5B judge rated **90/90 answers correct**, including 63 of the 87 whose number did not
+  match the gold. It is also the generator's own model (self-preference bias). "Judge correct" here is **not a metric**; use
+  `numeric_match` until a stronger judge from a different model family (e.g. `JUDGE=claude-haiku` or a free-tier Gemini) is
+  configured and validated against human labels (`scripts/10b_label_judge_sample.py`, 20 labels). Human validation: **not done yet**.
+- **Cost:** $0 (local). The token counts give the paid-model estimate once prices are set in `configs/llms.yaml`.

@@ -393,7 +393,7 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 **Concepts**
 - **Evaluate in layers:** retrieval metrics (free, deterministic) → generation metrics (correctness, faithfulness) → system metrics (latency, cost).
 - **Reference-based** metrics compare against a gold answer (numeric match, judge correctness). **Reference-free** metrics need no gold answer (faithfulness to the context, answer relevance).
-- **LLM-as-judge:** scalable, but biased (towards position, verbosity and its own model family). Validate it against human labels: my agreement was 📌% on 20 labels.
+- **LLM-as-judge:** scalable, but biased (towards position, verbosity and its own model family). Validate it against human labels. My own lesson: a local 1.5B judge (the same model as the generator) rated 90/90 answers correct, including 63 whose number was wrong. So it was useless, and I caught that by cross-checking against an exact numeric match before trusting it. Human-label agreement (20 labels, script 10b) is still to be measured.
 - **Noise:** with 150 questions, small differences aren't significant. Report n, the standard deviation, and the breakdown by question type.
 - **Regression gate:** a small, fixed set in CI that blocks merges which break retrieval.
 
@@ -407,7 +407,7 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 4. *"How do you evaluate in production without labels?"*
    → Faithfulness scored on a sample of traffic, user thumbs up or down, how often citations are clicked, retrieval-score drift, abstain-rate drift, and turning failures into new eval cases.
 
-**📌 Your numbers:** headline table · judge agreement · top failure categories
+**📌 Your numbers (P8, 30 Q, local 1.5B, `results/2026-11-24_end_to_end/`):** numeric match naive 0.24 → **baseline 0.31** → corrective 0.28 · gold page retrieved 0.17 → **0.47** · abstained 0.37 / 0.27 / 0.33 · p50 3.8 / 4.8 / 12.8 s · $0. The judge was useless: 90/90 marked correct, with 63 disagreements with numeric match. Top failures: the right filing but a neighbouring page; the small model computing a ratio from the wrong line items; over-abstaining.
 
 **Go deeper:** [LLM-as-a-Judge](https://arxiv.org/abs/2306.05685) · [RAGAS](https://arxiv.org/abs/2309.15217) · [ARES](https://arxiv.org/abs/2311.09476) · [Anthropic: statistical approach to evals](https://www.anthropic.com/research/statistical-approach-to-model-evals) · learn **bootstrap confidence intervals** and **paired significance tests** (§7)
 

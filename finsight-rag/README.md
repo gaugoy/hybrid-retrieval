@@ -3,8 +3,9 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P7 (advanced RAG) complete**: query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
-> Results tables and a demo arrive in later phases.
+> Status: **P8 (end-to-end evaluation) complete**; P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
+> **P8 (end-to-end eval):** on 30 FinanceBench questions with the local 1.5B model: numeric answer match **0.31** (filtered baseline) vs 0.24 naive; gold page retrieved 0.47 vs 0.17; $0. CI regression gate on retrieval. The local LLM judge proved unreliable (90/90 "correct") and isn't used as a metric ([`docs/evaluation.md`](docs/evaluation.md#p8--end-to-end-answer-quality-30-questions-local-qwen251-5b-results2026-11-24_end_to_end)).
+> A demo arrives in P9.
 
 ## Docs
 
