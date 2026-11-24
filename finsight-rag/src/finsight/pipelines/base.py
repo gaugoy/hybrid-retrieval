@@ -85,6 +85,9 @@ class RAGPipeline(ABC):
         timings["generate"] = round((time.perf_counter() - t0) * 1000, 1)
         text = resp.text.strip() or g.abstain_phrase
         citations, abstained, warnings = parse_citations(text, marker_map, g.abstain_phrase)
+        degraded = list(got.degraded)
+        if resp.fallback_from:
+            degraded.append("llm_fallback")
         if resp.stop_reason == "refusal":
             warnings.append("model_refusal")
             abstained = True
@@ -102,5 +105,5 @@ class RAGPipeline(ABC):
             usage={"input_tokens": resp.input_tokens, "output_tokens": resp.output_tokens},
             request_id=request_id or uuid.uuid4().hex[:12],
             warnings=warnings,
-            degraded=got.degraded,
+            degraded=degraded,
         )

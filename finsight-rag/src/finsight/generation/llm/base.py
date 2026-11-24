@@ -14,6 +14,7 @@ class LLMResponse(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     stop_reason: str | None = None
+    fallback_from: str | None = None  # P10: set when a fallback LLM answered instead
 
 
 class LLM(ABC):

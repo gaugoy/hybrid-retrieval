@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P9 (serving) complete**: FastAPI (`make serve`, docs at http://127.0.0.1:8000/docs) with SSE streaming, plus a Streamlit demo UI (`make ui`) that shows the cited answer and what each retrieval stage did. P8 (end-to-end evaluation) and P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
+> Status: **P10 (production hardening) complete**: graceful degradation (vector store down → BM25, LLM failure → fallback preset, flagged in `degraded`), an answer cache keyed by the config fingerprint, no Docker needed: API, UI and LLM run as independent processes ([runbook](docs/runbook.md)), [ADRs](docs/adr/). Load test with the local 1.5B: 1 user p50 2.5 s, 5 users p50 14.4 s, 0 errors; a cached answer 0.01 s. P9 (serving): FastAPI (`make serve`, docs at http://127.0.0.1:8000/docs) with SSE streaming, plus a Streamlit demo UI (`make ui`) that shows the cited answer and what each retrieval stage did. P8 (end-to-end evaluation) and P7 (advanced RAG): query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
 > **P8 (end-to-end eval):** on 30 FinanceBench questions with the local 1.5B model: numeric answer match **0.31** (filtered baseline) vs 0.24 naive; gold page retrieved 0.47 vs 0.17; $0. CI regression gate on retrieval. The local LLM judge proved unreliable (90/90 "correct") and isn't used as a metric ([`docs/evaluation.md`](docs/evaluation.md#p8--end-to-end-answer-quality-30-questions-local-qwen251-5b-results2026-11-24_end_to_end)).
 > A demo arrives in P9.
 
@@ -44,6 +44,17 @@ uv run python scripts/10_eval_end_to_end.py --limit 30            # step 10: end
 make serve   # API on :8000      then, in another terminal:
 make ui      # demo UI on :8501  ·  uv run python scripts/11_smoke_api.py  (step 11)
 ```
+
+### Run the app (three independent processes, no Docker)
+
+```bash
+ollama serve                 # terminal 1, optional: LLM server on the Mac GPU (LLM=ollama-qwen7b in .env)
+make serve                   # terminal 2: backend API   -> http://127.0.0.1:8000/docs
+make ui                      # terminal 3: frontend UI   -> http://localhost:8501
+```
+
+Without Ollama, the API uses the built-in local model (Qwen2.5-1.5B, no server needed) or a free-tier key from `.env`.
+Docker is **not needed**; see [docs/runbook.md](docs/runbook.md) for details and troubleshooting.
 
 ### Choosing the embedding model (local or online)
 

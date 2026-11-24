@@ -278,6 +278,8 @@ class LLMCfg(_Strict):
     timeout_s: float = Field(120, gt=0)
     rate_limit: RateLimitCfg = Field(default_factory=RateLimitCfg)
     allow_paid: bool = False
+    # P10: presets tried in order when this LLM fails (provider error, timeout, quota)
+    fallbacks: list[str] = Field(default_factory=list)
     # USD per 1M tokens, for cost estimates (0 = free tier / local)
     price_in: float = Field(0.0, ge=0)
     price_out: float = Field(0.0, ge=0)
@@ -303,6 +305,8 @@ class ApiCfg(_Strict):
     max_question_chars: int = Field(1000, gt=0)
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8501"])
     rate_limit_per_minute: int = Field(30, gt=0)  # per client IP
+    answer_cache: bool = True  # P10: reuse answers for (question, filters, pipeline, config)
+    answer_cache_ttl_s: int = Field(86_400, gt=0)
 
 
 class LoggingCfg(_Strict):

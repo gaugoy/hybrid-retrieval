@@ -1,0 +1,61 @@
+# docker compose up  ->  Qdrant server :6333, API :8000, UI :8501.
+# Before the first start: build the corpus on the host (make setup data ingest), then index into the
+# Qdrant container:  docker compose up -d qdrant && QDRANT_URL=http://localhost:6333 make index
+# (the embedding cache is reused: nothing is re-embedded). Full steps: docs/runbook.md.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.20.2   # match the qdrant-client minor version (1.20)
+    ports: ["6333:6333"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    image: finsight-rag:latest
+    restart: unless-stopped
+    ports: ["8000:8000"]
+    env_file:
+      - path: .env          # API keys (optional: everything works without them)
+        required: false
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_BASE_URL: http://host.docker.internal:11434   # Ollama runs on the host (Mac GPU)
+      # Docker on macOS has no GPU: the default is a 0.5B CPU model (fits the VM's memory, ~fast).
+      # Better answers: LLM=ollama-qwen7b (Ollama on the host) or a free-tier key in .env (LLM=gemini-flash).
+      LLM: ${LLM:-hf-qwen0.5b}
+      FINSIGHT__API__WARMUP: "true"
+      FINSIGHT__API__CORS_ORIGINS: '["http://localhost:8501"]'
+    volumes:
+      - ./data:/app/data:ro                  # chunks + documents (built on the host)
+      - ./indexes:/app/indexes               # BM25, manifest, embedding/answer caches
+      - ${HF_CACHE:-~/.cache/huggingface}:/models   # downloaded models, reused from the host
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      qdrant: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+
+  ui:
+    image: finsight-rag:latest
+    command: ["streamlit", "run", "ui/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    ports: ["8501:8501"]
+    environment:
+      FINSIGHT_API_URL: http://api:8000
+    healthcheck:   # override the image's API healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      api: {condition: service_healthy}
+
+volumes:
+  qdrant_data:

@@ -17,6 +17,7 @@ SAFETY NETS
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from finsight.config import Settings
@@ -51,8 +52,11 @@ class RetrievalService:
         sparse: Retriever | None,
         reranker: Reranker | None = None,
         extractor: FilterExtractor | None = None,
+        sparse_fallback: Callable[[], Retriever] | None = None,
     ) -> None:
         self.settings, self.dense, self.sparse = settings, dense, sparse
+        # P10: BM25, built only if the dense search fails in dense-only mode
+        self.sparse_fallback = sparse_fallback
         self.reranker = reranker or NoopReranker()
         self.extractor = extractor
 
@@ -115,11 +119,23 @@ class RetrievalService:
             if retriever is None or (mode != "hybrid" and mode != name):
                 continue
             t0 = time.perf_counter()
-            hits = retriever.retrieve(question, k, filters)
+            try:
+                hits = retriever.retrieve(question, k, filters)
+            except Exception as exc:
+                if name != "dense":
+                    raise
+                log.warning("dense search failed, using BM25", extra={"error": str(exc)})
+                if "dense_failed" not in result.degraded:
+                    result.degraded.append("dense_failed")
+                if mode == "dense" and self.sparse_fallback is not None:
+                    mode, retriever, name = "sparse", self.sparse_fallback(), "sparse"
+                    hits = retriever.retrieve(question, k, filters)
+                else:
+                    continue
             result.timings_ms[name] = _ms(t0)
             result.stages[name] = hits
             lists.append(hits)
-        if mode != "hybrid":
+        if mode != "hybrid" or len(lists) == 1:
             return lists[0] if lists else []
         t0 = time.perf_counter()
         fused = rrf_fuse(lists, self.settings.retrieval.rrf_k)[:k]

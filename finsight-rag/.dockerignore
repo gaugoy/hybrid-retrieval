@@ -1,0 +1,21 @@
+# Keep the build context small and secret-free: data, indexes and models are mounted as volumes.
+.env
+.env.*
+.venv/
+data/
+indexes/
+models/
+results/
+notebooks/
+docs/
+tests/
+scripts/
+tools/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.ipynb
+.git

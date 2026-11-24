@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from finsight.cli import app
@@ -50,10 +51,14 @@ def test_cli_help_lists_commands() -> None:
         assert cmd in result.output
 
 
-def test_cli_unbuilt_command_names_its_phase() -> None:
-    result = CliRunner().invoke(app, ["serve"])
-    assert result.exit_code == 2
-    assert "P9" in result.output
+def test_cli_serve_starts_uvicorn_with_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    import uvicorn
+
+    seen: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app_, host, port: seen.update(host=host, port=port))
+    result = CliRunner().invoke(app, ["serve", "--port", "8123"])
+    assert result.exit_code == 0, result.output
+    assert seen == {"host": "127.0.0.1", "port": 8123}
 
 
 def test_schema_contracts_basic() -> None:

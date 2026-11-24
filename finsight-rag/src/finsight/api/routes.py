@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterator
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from finsight.api.deps import ContainerDep
 from finsight.api.models import Health, QueryRequest, QueryResponse, Ready
@@ -74,6 +74,11 @@ def _pipeline(c: Container, req: QueryRequest) -> RAGPipeline:
     return scoped.pipeline
 
 
+@router.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/docs")
+
+
 @router.get("/health", response_model=Health)
 def health() -> Health:
     return Health()
@@ -104,12 +109,36 @@ def config(c: ContainerDep) -> dict:
 
 
 @router.post("/v1/query", response_model=QueryResponse)
-def query(req: QueryRequest, request: Request, c: ContainerDep) -> QueryResponse:
-    pipe = _pipeline(c, req)
-    try:
-        ans = pipe.answer(req.question, filters=req.filters, request_id=request.state.request_id)
-    except FinsightError as exc:
-        raise HTTPException(503, f"{type(exc).__name__}: {exc}") from exc
+def query(
+    req: QueryRequest, request: Request, response: Response, c: ContainerDep
+) -> QueryResponse:
+    cache = c.answer_cache
+    key = (
+        cache.key(
+            c.settings.fingerprint(),
+            question=req.question.strip(),
+            filters=req.filters.model_dump() if req.filters else None,
+            pipeline=req.pipeline or c.settings.pipeline,
+            llm=req.llm or c.settings.llm.preset,
+            top_k=req.top_k,
+        )
+        if cache
+        else ""
+    )
+    ans = cache.get(key) if cache else None
+    response.headers["X-Cache"] = "hit" if ans else "miss"
+    if ans is not None:
+        ans = ans.model_copy(update={"request_id": request.state.request_id})
+    else:
+        pipe = _pipeline(c, req)
+        try:
+            ans = pipe.answer(
+                req.question, filters=req.filters, request_id=request.state.request_id
+            )
+        except FinsightError as exc:
+            raise HTTPException(503, f"{type(exc).__name__}: {exc}") from exc
+        if cache and not ans.degraded:  # never cache an answer produced during an outage
+            cache.put(key, ans)
     data = ans.model_dump()
     if not req.include_retrieved:
         data["retrieved"] = []
