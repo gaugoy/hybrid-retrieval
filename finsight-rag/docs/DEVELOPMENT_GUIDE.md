@@ -1109,13 +1109,55 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P4 Indexing | ✅ done | 2026-11-24 | 31,114 page-aware chunks indexed in **5 min 6 s** on M5 (bge-small on MPS, **106 chunks/s**) · Qdrant 244 MB (embedded), BM25 25 MB (27,097 words), cache 66 MB · re-run 0.07 s · 3M capex gold page: dense rank 36 (no instruction) / 47 (with), BM25 121 → the vocabulary gap P5 must close · **online embedders** (Gemini, Mistral, Cohere, Jina, Voyage, Ollama; OpenAI paid-blocked) via presets + rate limits · dense-only baseline (150 Q): hit@10 0.46, MRR 0.23, doc_hit@10 0.89 · q30: bge-base 0.50 vs bge-small 0.43 hit@10 · 139 tests (137 fast + 2 slow) |
 | P5 Retrieval | ✅ done | 2026-11-24 | 4 chunkers × 8 variants × 150 Q · **best: recursive_384 + dense + company/year filter: hit@10 0.613**, MRR 0.35, doc_hit 0.99, ~110 ms · BM25 alone 0.15; hybrid (no filter) 0.32 < dense 0.46 · company filter: doc_hit 0.83 → 0.99 · local rerank +0–7 pts at ~2.7 s/q, not adopted · 161 tests |
 | P6 Generation | ✅ done | 2026-11-24 | LLM presets + auto (Ollama → Claude → Gemini/Mistral/Groq free tiers → local HF) · 3M capex: local Qwen2.5-1.5B answers **$1,577 million** (correct), 11 s, cited via auto_cite · off-topic question abstains · Claude path tested offline (no key) · 175 tests |
-| P7 Advanced | ✅ done | 2026-11-24 | query transforms (multi_query, hyde, decompose), corrective + agentic pipelines, contextual headers · MultiHop-RAG loader (609 articles, 2,556 Q, 301 null) via dataset dispatch · **perf fix: query + rerank caches -> re-runs ~19s->0.1s/q and reproducible** · 186 tests |
-| P8 Evaluation | ⬜ | | correct %: · faithfulness: |
+| P7 Advanced | ✅ done | 2026-11-24 | query transforms (multi_query, hyde, decompose), corrective + agentic pipelines, **contextual headers: hit@10 0.613 → 0.673** (150 Q) · query transforms not yet measured (`make eval-advanced`) · MultiHop-RAG loader (609 articles, 2,556 Q, 301 null) via dataset dispatch · **perf fix: query + rerank caches -> re-runs ~19s->0.1s/q and reproducible** · 186 tests |
+| P8 Evaluation | 🟨 in progress | 2026-11-24 | drafts in place (see §6.1) · correct %: · faithfulness: |
 | P9 Serving | ⬜ | | p50 latency: |
 | P10 Production | ⬜ | | |
 | P11 Docs | ⬜ | | |
 
 Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" boxes ticked)
+
+### 6.1 Resume notes (handover between sessions)
+
+> Kept current so a new session (human or agent) can pick up without the chat history. Update it, don't append forever.
+
+**Branches:** P3 merged to `main`. P4 `feat/p4-index`, P5 `feat/p5-retrieval`, P6 `feat/p6-generation`, P7 `feat/p7-advanced`
+(fe78351) are pushed; each branches from the previous one. P8 is on `feat/p8-eval` (from P7).
+
+**Environment gotchas**
+- VS Code notebook kernels hold the embedded-Qdrant lock on `indexes/qdrant`. For CLI runs while they are open, use a copy:
+  `cp -R indexes/qdrant indexes/qdrant_work && rm -f indexes/qdrant_work/.lock` and
+  `export FINSIGHT__PATHS__QDRANT_DIR=indexes/qdrant_work` (gitignored). Don't kill the user's kernels.
+- No API keys and no Ollama on this machine, so `llm.preset: auto` resolves to the local HF Qwen2.5-1.5B (slow, 1–4 s per call
+  on MPS). Long LLM evals: use `--limit`.
+- Query vectors and rerank scores are cached in `indexes/embed_cache/` (P7), so re-runs are fast and deterministic.
+- Shell heredocs that contain backticks must be quoted (`<<'EOF'`).
+
+**P7 open item:** the query-transform comparison (`make eval-advanced`, 60 Q) hasn't been run to completion yet. When it is,
+put its numbers in `docs/evaluation.md` (P7) and the P7 📌 line of the interview guide.
+
+**P8 state (`feat/p8-eval`)**
+- In the repo (drafts, untested end to end): `evaluation/generation_metrics.py`, `evaluation/judge.py` (+ prompts
+  `judge_correctness.md`, `judge_faithfulness.md`), `evaluation/e2e.py`, `observability/cost.py`,
+  `configs/experiments/end_to_end.yaml`, `tools/build_regression_set.py`, scripts `10_eval_end_to_end.py`, `10b_label_judge_sample.py`,
+  tests `unit/test_judge.py`, `unit/test_generation_metrics.py`, `integration/test_regression_gate.py`.
+- Done: `LLMCfg.price_in/price_out` (USD per 1M tokens, default 0) and `ApiCfg.rate_limit_per_minute` added to `config.py`.
+- To do, in order:
+  1. `uv run python tools/build_regression_set.py` → `tests/fixtures/regression_set.jsonl` (+ thresholds JSON), then make
+     `test_regression_gate.py` pass (the only failing test right now).
+  2. Set `price_in`/`price_out` on the paid presets in `configs/llms.yaml` from the providers' current pricing pages. Don't guess:
+     a $0 estimate is better than a wrong one. Free tiers and local stay 0.
+  3. Wire `finsight eval` / `make eval` for the end_to_end experiment. Run it on a sample (`--limit 30`, local LLM) and record
+     correct %, faithfulness, abstention, latency, cost.
+  4. Judge validation (script 10b) needs human labels. Until someone labels, document the judge as **unvalidated**.
+  5. `make notebooks`, lint/mypy/tests, update §5 P8 "Done when", this tracker row, §7, `evaluation.md`, the interview guide's P8 📌.
+
+**P9 drafts:** `src/finsight/api/` (models, middleware, deps, routes, main) is on disk **untracked**. Leave it out of the P8
+commit. Known issue: `api/main.py:57-58` uses `app` before it is defined (mypy). Still to write: `ui/streamlit_app.py`,
+`scripts/11_smoke_api.py`, `tests/integration/test_api.py`, `make serve` / `make ui`.
+
+**P10/P11:** not started (Dockerfile, compose, runbook, ADRs, load test, degraded fallbacks; final README, tag v1.0). Docker
+isn't installed on this machine, so mark container steps "not verified locally".
 
 ---
 

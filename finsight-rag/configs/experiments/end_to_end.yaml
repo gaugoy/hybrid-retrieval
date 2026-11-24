@@ -1,0 +1,11 @@
+# P8: end-to-end answer quality. Each variant = config overrides on top of the active profile.
+# The LLM is the profile's (llm.preset: auto -> whatever can run; set LLM=claude-opus etc.).
+# Run: make eval   (or scripts/10_eval_end_to_end.py --limit 30 for a quick look)
+name: end_to_end
+dataset: financebench
+judge: true            # LLM-as-judge correctness (judge.preset; cached)
+faithfulness: false    # judge each answer's claims against its cited chunks (one more call each)
+variants:
+  - {name: naive, pipeline: naive}
+  - {name: baseline, pipeline: hybrid_rerank}
+  - {name: corrective, pipeline: corrective}
