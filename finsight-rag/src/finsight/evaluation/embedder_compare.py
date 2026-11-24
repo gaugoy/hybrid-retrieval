@@ -27,7 +27,7 @@ import pandas as pd
 from qdrant_client import QdrantClient
 
 from finsight.config import Settings
-from finsight.data import financebench as fb
+from finsight.data import datasets as ds
 from finsight.embedding.catalog import preset_cfg
 from finsight.errors import FinsightError
 from finsight.evaluation.retrieval_metrics import score_question
@@ -70,7 +70,7 @@ def evaluate_dense(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Index (or reuse) and evaluate one preset. Returns per-question rows and the IndexReport."""
     s = settings_for(settings, preset)
-    records = fb.load_eval_records(s)
+    records = ds.eval_records(s)
     doc_names, tag = None, None
     if limit_questions:
         doc_names, tag = ixp.subset_for_questions(s, limit_questions)

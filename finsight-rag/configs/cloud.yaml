@@ -3,11 +3,7 @@
 # Merged on top of base.yaml.
 
 llm:
-  provider: anthropic
-  anthropic_model: claude-opus-5-5
-  anthropic_effort: medium
+  preset: claude-opus
 
 judge:
-  provider: anthropic
-  anthropic_model: claude-haiku-5-5
-  anthropic_effort: low
+  preset: claude-haiku

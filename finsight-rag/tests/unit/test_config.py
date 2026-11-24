@@ -12,7 +12,8 @@ from finsight.errors import ConfigError
 
 def test_base_and_local_profile_load(project_root: Path) -> None:
     s = load_settings(root=project_root, env={})
-    assert s.llm.provider == "ollama"
+    assert (s.llm.preset, s.llm.provider) == ("auto", "auto")
+    assert s.judge.auto_order[0] == "claude-haiku"
     assert s.chunking.strategy == "recursive"
     assert s.config_path == project_root / "configs" / "local.yaml"
 
@@ -25,9 +26,12 @@ def test_paths_are_resolved_against_root(project_root: Path) -> None:
 
 def test_cloud_profile_switches_providers(project_root: Path) -> None:
     s = load_settings("configs/cloud.yaml", root=project_root, env={})
-    assert s.llm.provider == "anthropic"
-    assert s.judge.provider == "anthropic"
-    assert s.judge.anthropic_model == "claude-haiku-5-5"
+    assert (s.llm.provider, s.llm.model, s.llm.effort) == ("anthropic", "claude-opus-5-5", "medium")
+    assert (s.judge.provider, s.judge.model, s.judge.effort) == (
+        "anthropic",
+        "claude-haiku-5-5",
+        "low",
+    )
 
 
 def test_precedence_yaml_then_env_then_overrides(project_root: Path) -> None:
@@ -45,10 +49,10 @@ def test_precedence_yaml_then_env_then_overrides(project_root: Path) -> None:
 
 
 def test_env_aliases_and_empty_values(project_root: Path) -> None:
-    env = {"LLM_PROVIDER": "anthropic", "OLLAMA_MODEL": "llama3.1:8b", "QDRANT_URL": ""}
+    env = {"LLM": "ollama-qwen7b", "LLM_MODEL": "llama3.1:8b", "QDRANT_URL": ""}
     s = load_settings(root=project_root, env=env)
-    assert s.llm.provider == "anthropic"
-    assert s.llm.ollama_model == "llama3.1:8b"
+    assert s.llm.provider == "ollama"
+    assert s.llm.model == "llama3.1:8b"  # explicit model beats the preset's
     assert s.vector_store.qdrant_url is None  # empty string means "not set"
 
 
@@ -61,12 +65,12 @@ def test_dotenv_file_is_read_but_real_env_wins(
     project_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (project_root / ".env").write_text(
-        "OLLAMA_MODEL=from-dotenv\nANTHROPIC_API_KEY=sk-ant-test-1234567890\n"
+        "LLM_MODEL=from-dotenv\nLLM=ollama-qwen7b\nANTHROPIC_API_KEY=sk-ant-test-1234567890\n"
     )
-    monkeypatch.setenv("OLLAMA_MODEL", "from-real-env")
+    monkeypatch.setenv("LLM_MODEL", "from-real-env")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     s = load_settings(root=project_root)
-    assert s.llm.ollama_model == "from-real-env"
+    assert s.llm.model == "from-real-env"
     assert s.secrets.anthropic_api_key is not None
     assert s.secrets.anthropic_api_key.get_secret_value() == "sk-ant-test-1234567890"
 

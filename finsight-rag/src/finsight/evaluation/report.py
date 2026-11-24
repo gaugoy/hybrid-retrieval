@@ -16,6 +16,8 @@ def summary_table(df: pd.DataFrame, metrics: list[str] = HEADLINE) -> pd.DataFra
     for m in metrics:
         out[m] = [f"{a:.3f} ± {b:.3f}" for a, b in zip(mean[m], std[m].fillna(0), strict=True)]
     out["p50 ms"] = g["latency_ms"].median().round(0).astype(int)
+    if "llm_calls" in df and df["llm_calls"].any():
+        out["LLM calls/q"] = g["llm_calls"].mean().round(2)
     out["n"] = g.size()
     return out
 

@@ -13,7 +13,10 @@ from finsight.schemas import Chunk, QueryFilters
 
 
 def test_ollama_unreachable_is_warning_not_failure(project_root: Path) -> None:
-    s = load_settings(root=project_root, env={"OLLAMA_BASE_URL": "http://127.0.0.1:9"})
+    env = {"OLLAMA_BASE_URL": "http://127.0.0.1:9"}
+    auto = check_ollama(load_settings(root=project_root, env=env), timeout_s=0.5)
+    assert auto.status == "info"  # llm=auto: Ollama is only one option
+    s = load_settings(root=project_root, env={**env, "LLM": "ollama-qwen7b"})
     result = check_ollama(s, timeout_s=0.5)
     assert result.status == "warn"
     assert "ollama" in result.hint.lower()
@@ -48,9 +51,9 @@ def test_cli_help_lists_commands() -> None:
 
 
 def test_cli_unbuilt_command_names_its_phase() -> None:
-    result = CliRunner().invoke(app, ["query", "What was 3M's capex?"])
+    result = CliRunner().invoke(app, ["serve"])
     assert result.exit_code == 2
-    assert "P6" in result.output
+    assert "P9" in result.output
 
 
 def test_schema_contracts_basic() -> None:

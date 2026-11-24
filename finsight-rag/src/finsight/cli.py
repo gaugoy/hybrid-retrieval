@@ -61,13 +61,22 @@ def download(
     config: Path | None = ConfigOpt,
     limit_docs: int | None = typer.Option(None, help="Only the first N PDFs (trial run)"),
     force: bool = typer.Option(False, help="Re-download even if files exist"),
+    dataset: str = typer.Option("financebench", help="financebench | multihop (P7)"),
 ) -> None:
-    """Download FinanceBench (Q&A, doc metadata, referenced PDFs). [P1]"""
+    """Download FinanceBench (Q&A, metadata, PDFs) or MultiHop-RAG. [P1/P7]"""
     from finsight.data.download import download_financebench
     from finsight.observability.logging import configure_logging
 
     settings = load_settings(config)
     configure_logging(settings.logging.level, settings.logging.json_format)
+    if dataset == "multihop":
+        from finsight.data import multihop
+
+        paths = multihop.download(settings, force=force)
+        console.print(
+            "multihop: " + ", ".join(f"{p.name} {p.stat().st_size / 1e6:.1f}MB" for p in paths)
+        )
+        return
     report = download_financebench(settings, limit_docs=limit_docs, force=force)
     console.print(
         f"questions={report.n_questions} docs={report.n_docs_needed} "
@@ -274,9 +283,93 @@ def compare_embedders_cmd(
 
 
 @app.command()
-def query(question: str) -> None:
+def query(
+    question: str,
+    config: Path | None = ConfigOpt,
+    llm: str | None = typer.Option(
+        None, "--llm", help="LLM preset (finsight llms); default: config"
+    ),
+    pipeline: str | None = typer.Option(None, help="naive | hybrid_rerank | corrective | agentic"),
+    as_json: bool = typer.Option(False, "--json", help="Print the full Answer as JSON"),
+) -> None:
     """Answer a question with citations. [P6]"""
-    _not_yet("P6")
+    from finsight.container import Container
+    from finsight.observability.logging import configure_logging
+
+    overrides: dict[str, object] = {}
+    if llm:
+        overrides["llm"] = {"preset": llm}
+    if pipeline:
+        overrides["pipeline"] = pipeline
+    settings = load_settings(config, overrides or None)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    c = Container(settings)
+    try:
+        ans = c.pipeline.answer(question)
+    finally:
+        c.close()
+    if as_json:
+        console.print_json(ans.model_dump_json(exclude={"retrieved"}))
+        return
+    console.print(f"[bold]{ans.answer}[/]\n")
+    for ci in ans.citations:
+        console.print(
+            f"  [{ci.marker}] {ci.doc_name} p{ci.page_idx + 1}: {' '.join(ci.snippet.split())[:90]}"
+        )
+    console.print(
+        f"\n{ans.pipeline} · {ans.provider}:{ans.model} · "
+        f"{ans.timings_ms.get('total', 0):.0f} ms · "
+        f"tokens {ans.usage} · warnings {ans.warnings or '-'} · degraded {ans.degraded or '-'}"
+    )
+
+
+@app.command()
+def llms(config: Path | None = ConfigOpt) -> None:
+    """List LLM presets: provider, model, cost, can it run now, what auto picks. [P6]"""
+    from rich.table import Table
+
+    from finsight.config import LLMCfg, load_llm_presets, resolve_llm_preset
+    from finsight.errors import FinsightError
+    from finsight.generation.llm.factory import can_run, resolve_auto
+
+    settings = load_settings(config)
+    table = Table(header_style="bold", title="LLM presets (configs/llms.yaml)")
+    for col in ("preset", "provider", "model", "cost", "can run now", "notes"):
+        table.add_column(col, overflow="fold")
+    for name in load_llm_presets(settings.root):
+        if name == "auto":
+            continue
+        cfg = LLMCfg.model_validate(resolve_llm_preset(settings.root, {"preset": name}))
+        ok, why = can_run(cfg, settings.secrets)
+        cost = (
+            "PAID"
+            if cfg.provider == "openai"
+            else ("local" if cfg.provider in ("ollama", "hf") else "free tier")
+        )
+        if cfg.provider == "anthropic":
+            cost = "paid API"
+        table.add_row(
+            name,
+            cfg.provider,
+            cfg.model,
+            cost,
+            "yes" if ok else why,
+            cfg.notes,
+            style="green" if ok else "dim",
+        )
+    console.print(table)
+    for role, cfg in (("llm", settings.llm), ("judge", settings.judge)):
+        try:
+            pick = (
+                resolve_auto(cfg, settings.root, settings.secrets)
+                if cfg.provider == "auto"
+                else cfg
+            )
+            console.print(
+                f"{role}: preset={cfg.preset} -> {pick.preset} ({pick.provider}:{pick.model})"
+            )
+        except FinsightError as exc:
+            console.print(f"[yellow]{role}: {exc}[/]")
 
 
 @app.command("eval")
@@ -295,6 +388,26 @@ def eval_cmd(
     configure_logging(settings.logging.level, settings.logging.json_format)
     exp_path = experiment if experiment.is_absolute() else settings.root / experiment
     out = run_retrieval_eval(settings, load_experiment(exp_path), limit=limit)
+    console.print((out / "report.md").read_text())
+    console.print(f"report: {out}")
+
+
+@app.command()
+def sample(
+    config: Path | None = ConfigOpt,
+    pipelines: str = typer.Option("hybrid_rerank,agentic", help="Comma-separated pipeline names"),
+    n: int = typer.Option(50, help="Questions in the sample"),
+    null_share: float = typer.Option(0.2, help="Share of unanswerable questions (MultiHop-RAG)"),
+    seed: int = typer.Option(7, help="Sampling seed"),
+) -> None:
+    """End-to-end pipeline comparison on a seeded question sample; report in results/. [P7]"""
+    from finsight.evaluation.pipeline_sample import run_pipeline_sample
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    names = [p.strip() for p in pipelines.split(",") if p.strip()]
+    out = run_pipeline_sample(settings, names, n=n, null_share=null_share, seed=seed)
     console.print((out / "report.md").read_text())
     console.print(f"report: {out}")
 

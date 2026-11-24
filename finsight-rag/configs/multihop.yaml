@@ -1,0 +1,24 @@
+# MultiHop-RAG profile (P7): 609 news articles, 2,556 questions (301 unanswerable "null" queries).
+# Use:  uv run finsight download --dataset multihop
+#       uv run finsight index -c configs/multihop.yaml
+#       uv run python scripts/09_advanced_rag.py -c configs/multihop.yaml --technique agentic
+# Separate chunk/BM25 folders so FinanceBench artifacts are never overwritten; the Qdrant
+# collection name already starts with the dataset.
+dataset: multihop
+
+paths:
+  processed_dir: data/processed/multihop
+  chunks_dir: data/chunks/multihop
+  bm25_dir: indexes/bm25/multihop
+
+chunking:
+  strategy: recursive        # news articles: no pages, no tables
+  chunk_tokens: 384
+
+retrieval:
+  filter_fields: [company]   # "company" = the news source (The Verge, TechCrunch, ...), often named in the question
+
+llm:
+  preset: auto
+judge:
+  preset: auto

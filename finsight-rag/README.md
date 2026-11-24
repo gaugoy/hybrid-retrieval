@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P5 (retrieval) complete**: best retrieval = recursive 384-token chunks + dense search + company/year filters from the question: the gold evidence page is in the top 10 for **61%** of FinanceBench questions and the right filing for **99%** (dense alone: 46% / 89%). Full ablation in [`docs/evaluation.md`](docs/evaluation.md).
+> Status: **P7 (advanced RAG) complete**: query rewriting (multi-query, HyDE, decomposition), corrective and agentic pipelines, contextual chunk headers, and a second benchmark (MultiHop-RAG, cross-document + unanswerable questions). Query and reranker caches make evaluations fast and reproducible. Retrieval (P5): gold page in the top 10 for 61% of FinanceBench questions ([`docs/evaluation.md`](docs/evaluation.md)).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -36,6 +36,9 @@ uv run python scripts/05_embed_and_index.py  # step 05: embed chunks (~5 min fir
 uv run python scripts/05b_compare_embedders.py   # step 05b: compare embedders (local vs online) on the same chunks
 uv run python scripts/06_retrieve.py            # step 06: one question through BM25 / dense / hybrid / rerank
 uv run python scripts/07_eval_retrieval.py      # step 07: the retrieval ablation (~30 min with rerank variants)
+uv run python scripts/08_generate.py --show-prompt   # step 08: a cited answer, the exact prompt, timings
+uv run finsight query "What was 3M's FY2018 capex?"  # the same from the CLI (finsight llms: which LLM)
+uv run python scripts/09_advanced_rag.py --technique multi_query   # step 09: query rewriting / corrective / agentic
 ```
 
 ### Choosing the embedding model (local or online)
@@ -65,7 +68,7 @@ Further steps are added phase by phase. `make ingest` parses and chunks on all c
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, container, CLI, data, ingestion, chunking, embedding, indexing
-scripts/          cell-based learning steps (00_check_env … 07_eval_retrieval)
+scripts/          cell-based learning steps (00_check_env … 09_advanced_rag)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit, integration (fake models) and slow (real data/models) tests
 docs/             spec, development guide, interview guide

@@ -12,7 +12,7 @@ LAYERS (lowest → highest precedence)
   1. configs/base.yaml                 defaults for everything
   2. the chosen YAML (local/cloud/...) deep-merged on top
   3. environment variables              FINSIGHT__SECTION__KEY=value, plus a few friendly aliases
-                                        (LLM_PROVIDER, OLLAMA_MODEL, QDRANT_URL, ...)
+                                        (LLM, JUDGE, EMBEDDER, QDRANT_URL, ...)
   4. ``overrides`` passed in code       e.g. by the eval runner for each experiment variant
 
 Secrets (API keys) are kept apart in ``Secrets``. They never come from YAML and are never part
@@ -42,11 +42,10 @@ ENV_PREFIX = "FINSIGHT__"
 
 # Friendly env-var names (used in .env.example) → dotted config path.
 ENV_ALIASES: dict[str, str] = {
-    "LLM_PROVIDER": "llm.provider",
+    "LLM": "llm.preset",  # a preset from configs/llms.yaml ("auto" = first that can run)
+    "LLM_MODEL": "llm.model",
     "OLLAMA_BASE_URL": "llm.ollama_base_url",
-    "OLLAMA_MODEL": "llm.ollama_model",
-    "ANTHROPIC_MODEL": "llm.anthropic_model",
-    "JUDGE_PROVIDER": "judge.provider",
+    "JUDGE": "judge.preset",
     "QDRANT_URL": "vector_store.qdrant_url",
     "EMBEDDER": "embedding.preset",  # a preset name from configs/embedders.yaml
     "EMBEDDING_PROVIDER": "embedding.provider",
@@ -65,6 +64,8 @@ FINGERPRINT_FIELDS = {
     "rerank",
     "pipeline",
     "generation",
+    "crag",
+    "agent",
     "llm",
     "judge",
 }
@@ -229,21 +230,67 @@ class GenerationCfg(_Strict):
     abstain_phrase: str = "Not found in the provided filings."
 
 
+class CragCfg(_Strict):
+    """Corrective RAG (P7): when to distrust the retrieved context."""
+
+    min_score: float = 0.70  # top retrieval score below this = insufficient (calibrated in P7)
+    llm_grader: bool = False  # also ask the LLM "is this enough?" (one extra call)
+
+
+class AgentCfg(_Strict):
+    max_steps: int = Field(5, gt=0, le=20)
+
+
+LLMProvider = Literal[
+    "auto", "ollama", "hf", "anthropic", "gemini", "mistral", "groq", "openai", "fake"
+]
+GEN_AUTO_ORDER = [
+    "ollama-qwen7b",
+    "claude-opus",
+    "gemini-flash",
+    "mistral-small",
+    "groq-llama",
+    "hf-qwen1.5b",
+]
+JUDGE_AUTO_ORDER = [
+    "claude-haiku",
+    "gemini-flash",
+    "mistral-small",
+    "groq-llama",
+    "ollama-qwen7b",
+    "hf-qwen1.5b",
+]
+
+
 class LLMCfg(_Strict):
-    provider: Literal["ollama", "anthropic"] = "ollama"
+    """An LLM, usually from a PRESET in configs/llms.yaml (LLM=claude-opus, JUDGE=claude-haiku).
+
+    preset "auto" picks, at build time, the first preset in auto_order that can run right now.
+    """
+
+    preset: str | None = "auto"
+    provider: LLMProvider = "auto"
+    model: str = "auto"
+    base_url: str | None = None  # override the provider's endpoint
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b-instruct"
-    ollama_num_ctx: int = Field(8192, gt=0)
-    anthropic_model: str = "claude-opus-5-5"
-    anthropic_effort: Literal["low", "medium", "high"] = "medium"
+    num_ctx: int = Field(8192, gt=0)  # ollama / hf context window
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"  # Claude only
     timeout_s: float = Field(120, gt=0)
+    rate_limit: RateLimitCfg = Field(default_factory=RateLimitCfg)
+    allow_paid: bool = False
+    auto_order: list[str] = Field(default_factory=lambda: list(GEN_AUTO_ORDER))
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def _model_set(self) -> LLMCfg:
+        if self.provider != "auto" and self.model == "auto":
+            raise ValueError("llm.model is 'auto' but provider is not: pick a preset (LLM=<name>)")
+        return self
 
 
-class JudgeCfg(_Strict):
-    provider: Literal["ollama", "anthropic"] = "ollama"
-    ollama_model: str = "qwen2.5:7b-instruct"
-    anthropic_model: str = "claude-haiku-5-5"
-    anthropic_effort: Literal["low", "medium", "high"] = "low"
+class JudgeCfg(LLMCfg):
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    auto_order: list[str] = Field(default_factory=lambda: list(JUDGE_AUTO_ORDER))
 
 
 class ApiCfg(_Strict):
@@ -268,6 +315,7 @@ API_KEY_ENV: dict[str, tuple[str, ...]] = {
     "mistral": ("MISTRAL_API_KEY",),
     "jina": ("JINA_API_KEY",),
     "voyage": ("VOYAGE_API_KEY",),
+    "groq": ("GROQ_API_KEY",),
 }
 
 
@@ -281,6 +329,7 @@ class Secrets(BaseModel):
     mistral_api_key: SecretStr | None = None
     jina_api_key: SecretStr | None = None
     voyage_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Secrets:
@@ -310,6 +359,8 @@ class Settings(_Strict):
     rerank: RerankCfg = Field(default_factory=RerankCfg)
     pipeline: Literal["naive", "hybrid_rerank", "corrective", "agentic"] = "hybrid_rerank"
     generation: GenerationCfg = Field(default_factory=GenerationCfg)
+    crag: CragCfg = Field(default_factory=CragCfg)
+    agent: AgentCfg = Field(default_factory=AgentCfg)
     llm: LLMCfg = Field(default_factory=LLMCfg)
     judge: JudgeCfg = Field(default_factory=JudgeCfg)
     api: ApiCfg = Field(default_factory=ApiCfg)
@@ -439,6 +490,29 @@ def resolve_embedding_preset(root: Path, embedding: dict[str, Any]) -> dict[str,
     return deep_merge(presets[name], embedding)
 
 
+LLMS_FILE = "configs/llms.yaml"
+
+
+def load_llm_presets(root: Path) -> dict[str, dict[str, Any]]:
+    path = root / LLMS_FILE
+    data = _read_yaml(path) if path.is_file() else {}
+    return {name: dict(cfg or {}) for name, cfg in data.items()}
+
+
+def resolve_llm_preset(root: Path, section: dict[str, Any]) -> dict[str, Any]:
+    """Expand llm/judge `preset` from configs/llms.yaml; keys set elsewhere win."""
+    name = section.get("preset")
+    if not name:
+        return section
+    presets = load_llm_presets(root)
+    if name not in presets:
+        raise ConfigError(
+            f"Unknown LLM preset {name!r}. Available: {', '.join(sorted(presets))} "
+            f"(see {LLMS_FILE}, or run: uv run finsight llms)"
+        )
+    return deep_merge(presets[name], section)
+
+
 def load_settings(
     config: str | Path | None = None,
     overrides: Mapping[str, Any] | None = None,
@@ -473,6 +547,8 @@ def load_settings(
     if overrides:
         merged = deep_merge(merged, overrides)
     merged["embedding"] = resolve_embedding_preset(root, merged.get("embedding") or {})
+    for section in ("llm", "judge"):
+        merged[section] = resolve_llm_preset(root, merged.get(section) or {})
 
     try:
         settings = Settings.model_validate(merged)

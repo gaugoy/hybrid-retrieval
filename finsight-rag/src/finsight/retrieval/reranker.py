@@ -18,6 +18,7 @@ PROVIDERS (rerank.provider)
 
 from __future__ import annotations
 
+import hashlib
 import time
 from functools import cached_property
 from pathlib import Path
@@ -60,6 +61,43 @@ API_RERANKERS: dict[str, dict[str, str]] = {
 }
 
 
+class ScoreCache:
+    """query+chunk -> cross-encoder score, in SQLite. Re-running an eval then reuses the scores
+    instead of recomputing them (slow) and returns the same order every time (reproducible)."""
+
+    def __init__(self, path: Path, model: str) -> None:
+        import sqlite3
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.model = model
+        self._db = sqlite3.connect(path)
+        self._db.execute("CREATE TABLE IF NOT EXISTS rr (key TEXT PRIMARY KEY, score REAL)")
+
+    def _key(self, query: str, chunk_id: str, text: str) -> str:
+        blob = f"{self.model}\x00{query}\x00{chunk_id}\x00{hash_text(text)}"
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    def get(self, query: str, candidates: list[RetrievedChunk]) -> dict[int, float]:
+        out: dict[int, float] = {}
+        for i, c in enumerate(candidates):
+            key = self._key(query, c.chunk.chunk_id, c.chunk.text)
+            row = self._db.execute("SELECT score FROM rr WHERE key = ?", (key,)).fetchone()
+            if row is not None:
+                out[i] = float(row[0])
+        return out
+
+    def put(self, query: str, scored: list[tuple[RetrievedChunk, float]]) -> None:
+        self._db.executemany(
+            "INSERT OR REPLACE INTO rr VALUES (?, ?)",
+            [(self._key(query, c.chunk.chunk_id, c.chunk.text), s) for c, s in scored],
+        )
+        self._db.commit()
+
+
+def hash_text(text: str) -> str:
+    return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
 def _reorder(
     candidates: list[RetrievedChunk], scores: list[tuple[int, float]], top_n: int, name: str
 ) -> list[RetrievedChunk]:
@@ -89,10 +127,16 @@ class LocalCrossEncoderReranker(Reranker):
     name = "local"
 
     def __init__(
-        self, model: str, device: str = "auto", max_length: int = 512, batch_size: int = 16
+        self,
+        model: str,
+        device: str = "auto",
+        max_length: int = 512,
+        batch_size: int = 16,
+        cache: ScoreCache | None = None,
     ):
         self.model_name, self._device = model, device
         self.max_length, self.batch_size = max_length, batch_size
+        self.cache = cache
 
     @cached_property
     def model(self) -> CrossEncoder:
@@ -109,9 +153,17 @@ class LocalCrossEncoderReranker(Reranker):
     ) -> list[RetrievedChunk]:
         if not candidates:
             return []
-        pairs = [(query, c.chunk.text) for c in candidates]
-        scores = self.model.predict(pairs, batch_size=self.batch_size, show_progress_bar=False)
-        return _reorder(candidates, list(enumerate(map(float, scores))), top_n, self.name)
+        cached = self.cache.get(query, candidates) if self.cache is not None else {}
+        todo = [i for i in range(len(candidates)) if i not in cached]
+        if todo:
+            pairs = [(query, candidates[i].chunk.text) for i in todo]
+            fresh = self.model.predict(pairs, batch_size=self.batch_size, show_progress_bar=False)
+            for i, s in zip(todo, map(float, fresh), strict=True):
+                cached[i] = s
+            if self.cache is not None:
+                self.cache.put(query, [(candidates[i], cached[i]) for i in todo])
+        scores = [(i, cached[i]) for i in range(len(candidates))]
+        return _reorder(candidates, scores, top_n, self.name)
 
 
 class APIReranker(Reranker):
@@ -179,11 +231,17 @@ def build_reranker(
     secrets: Secrets | None = None,
     device: str = "auto",
     usage_dir: Path | None = None,
+    cache_dir: Path | None = None,
 ) -> Reranker:
     if cfg.provider == "none":
         return NoopReranker()
     if cfg.provider == "local":
-        return LocalCrossEncoderReranker(cfg.model, device, cfg.max_length, cfg.batch_size)
+        cache = None
+        if cache_dir is not None:
+            from finsight.embedding.base import model_slug
+
+            cache = ScoreCache(cache_dir / f"rerank_{model_slug(cfg.model)}.sqlite", cfg.model)
+        return LocalCrossEncoderReranker(cfg.model, device, cfg.max_length, cfg.batch_size, cache)
     key = secrets.for_provider(cfg.provider) if secrets else None
     if key is None:
         raise MissingAPIKeyError(

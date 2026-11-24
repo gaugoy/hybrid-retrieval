@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,6 +65,36 @@ class EmbeddingCache:
 
     def close(self) -> None:
         self._db.close()
+
+
+def cached_query_vectors(
+    cache: EmbeddingCache | None,
+    ident: str,
+    formatted: list[str],
+    embed: Callable[[list[str]], np.ndarray],
+    dim: int,
+) -> tuple[np.ndarray, int]:
+    """Query vectors for `formatted`, reusing `cache` (key = sha256(ident + text)).
+
+    Only texts missing from the cache are embedded, and the misses are stored. Caching queries
+    makes re-running an evaluation free AND reproducible: the same cached bytes come back, so a
+    non-deterministic backend (e.g. Apple MPS) can't change the ranking between runs. Returns
+    (vectors in order, number of cache hits).
+    """
+    if not formatted:
+        return np.zeros((0, dim), dtype=np.float32), 0
+    keys = [cache_key(ident, t) for t in formatted]
+    found = cache.get_many(list(dict.fromkeys(keys))) if cache is not None else {}
+    hits = sum(k in found for k in keys)
+    todo = list(dict.fromkeys(k for k in keys if k not in found))
+    if todo:
+        text_of = dict(zip(keys, formatted, strict=True))
+        vecs = embed([text_of[k] for k in todo])
+        new = dict(zip(todo, vecs, strict=True))
+        found.update(new)
+        if cache is not None:
+            cache.put_many(new)
+    return np.stack([found[k] for k in keys]).astype(np.float32), hits
 
 
 def embed_with_cache(

@@ -34,6 +34,8 @@ def tiny_settings(root: Path, **overrides: object) -> Settings:
         "chunking": {"strategy": "page_aware", "chunk_tokens": 60, "overlap_tokens": 0},
         "rerank": {"provider": "none"},
         "retrieval": {"mode": "hybrid", "filter_fields": ["company"]},
+        "llm": {"preset": "fake"},
+        "judge": {"preset": "fake"},
     }
     for k, v in overrides.items():
         base[k] = {**base.get(k, {}), **v} if isinstance(v, dict) else v  # type: ignore[dict-item]
@@ -44,6 +46,8 @@ def tiny_settings(root: Path, **overrides: object) -> Settings:
 def tiny(project_root: Path) -> Settings:
     with (project_root / "configs" / "embedders.yaml").open("a") as f:
         f.write("\nfake: {provider: fake, model: fake, dimensions: 32}\n")
+    with (project_root / "configs" / "llms.yaml").open("a") as f:
+        f.write("\nfake: {provider: fake, model: fake}\n")
     s = tiny_settings(project_root)
     fb.raw_dir(s).mkdir(parents=True)
     for name in (fb.QA_FILE, fb.DOCS_FILE):

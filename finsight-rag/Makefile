@@ -2,7 +2,7 @@
 # Every target runs inside the uv-managed environment (.venv, Python 3.12).
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks check-env lint fmt test test-slow notebooks kernel jupyter data ingest chunk-sweep index embedders compare-embedders eval-retrieval eval serve ui clean-cache
+.PHONY: help setup hooks check-env lint fmt test test-slow notebooks kernel jupyter data ingest chunk-sweep index embedders compare-embedders eval-retrieval eval-advanced multihop eval serve ui clean-cache
 
 help: ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -61,6 +61,15 @@ compare-embedders: ## P4: dense-retrieval comparison, e.g. make compare-embedder
 
 eval-retrieval: ## P5: retrieval ablation (all chunkers × variants, 150 Q); report in results/
 	uv run finsight eval --experiment configs/experiments/retrieval_ablation.yaml
+
+eval-advanced: ## P7: query transforms (multi_query, hyde, decompose) + contextual headers vs the baseline
+	uv run finsight eval --experiment configs/experiments/contextual.yaml
+	uv run finsight eval --experiment configs/experiments/advanced.yaml
+
+multihop: ## P7: download + index MultiHop-RAG, then baseline vs agentic on 50 questions (incl. 10 null)
+	uv run finsight download --dataset multihop
+	uv run finsight index -c configs/multihop.yaml
+	uv run finsight sample -c configs/multihop.yaml --pipelines hybrid_rerank,corrective,agentic --n 50
 
 eval: ## P8: end-to-end evaluation
 	uv run python scripts/10_eval_end_to_end.py --experiment configs/experiments/end_to_end.yaml
