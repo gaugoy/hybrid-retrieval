@@ -1121,6 +1121,8 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 > Kept current so a new session (human or agent) can pick up without the chat history. Update it, don't append forever.
 
+**Start a session cheaply:** read `CLAUDE.md` (auto-loaded) and then `docs/CODEMAP.md` (~1k tokens), and open only the files it points to. Don't read this whole guide (~26k tokens).
+
 **Branches:** P3 merged to `main`. P4 `feat/p4-index`, P5 `feat/p5-retrieval`, P6 `feat/p6-generation`, P7 `feat/p7-advanced`
 (fe78351) are pushed; each branches from the previous one. P8 is on `feat/p8-eval` (from P7).
 
