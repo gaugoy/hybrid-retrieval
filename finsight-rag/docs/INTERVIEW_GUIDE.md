@@ -293,21 +293,27 @@ Each phase has the same parts: **Concepts** (plain words) · **Most-asked questi
 
 **Most-asked questions**
 1. *"Why hybrid search? Isn't dense retrieval enough?"*
-   → Show the table: dense 📌, BM25 📌, hybrid 📌. Then give a concrete example query where BM25 found the line item and dense didn't, and the reverse. For context, my FiQA experiment cited public baselines of roughly BM25 ~24 and `text-embedding-3-small` ~31 NDCG@10, with cross-encoder reranking above 40. Quote your own measured numbers first.
+   → My honest answer is a table (page-aware 384, 150 questions, hit@10): dense **0.46**, BM25 **0.15**, hybrid **0.32**, hybrid + company filter 0.45, + year filter **0.52**, + reranker 0.53. Hybrid alone was *worse* than dense: FinanceBench questions are long and instruction-heavy ("Assume you are a public equities analyst…"), so BM25 matches boilerplate words, and RRF gives that weak list equal weight. Hybrid pays off once the filter narrows the corpus to one company, where exact line-item words matter again. The lesson: don't assume hybrid > dense, measure it on your data.
 2. *"Why RRF rather than a weighted score sum?"*
    → The scores live on different scales and distributions, and those change from query to query. RRF needs no calibration, is robust, and k=60 is the standard value. A weighted sum needs normalization (min-max or z-score) and tuning, and can win if it is tuned on held-out data.
 3. *"Bi-encoder vs. cross-encoder?"*
    → A bi-encoder embeds separately: fast and indexable, but coarse. A cross-encoder reads the pair jointly: accurate but O(n) model calls per query. So: bi-encoder for recall, cross-encoder for precision on the top candidates.
 4. *"How many candidates should you rerank?"*
-   → It's a trade-off: more candidates give more recall, but latency grows linearly. I measured top-20/50/100 against latency: 📌. Pick the knee of the curve.
+   → It's a trade-off: more candidates give more recall, but latency grows linearly. I rerank 50 with bge-reranker-base on the Mac GPU: **~2.5 s per question** (p50) versus ~120 ms without it, for +1–12 points hit@10 depending on the chunker. Measure 20/50/100 and pick the knee of the curve; in production, a smaller reranker or an API reranker.
 5. *"Your retrieval is bad. How do you debug it?"*
    → (1) Is the answer in the corpus, and was it parsed? (the evidence check) (2) Is it inside one chunk? (chunk coverage) (3) Does it appear in the top-50 of either retriever? (4) Is it lost at fusion or at reranking? (5) Did a filter remove it? Each stage is logged, so I can tell which one failed.
 6. *"What's the difference between Recall@k and NDCG?"*
    → Recall asks whether it was found; NDCG asks how high it was ranked. For RAG, recall at the context size matters most (the LLM sees all k chunks), but rank still matters because of "lost in the middle".
 7. *"Filtering: before or after the vector search?"*
-   → Filtering during the search (Qdrant's filterable HNSW) avoids getting fewer than k results. Filtering afterwards needs over-fetching. I do that for BM25 (fetch 4k, then filter).
+   → Filtering during the search (Qdrant's filterable HNSW) avoids getting fewer than k results. Filtering afterwards needs over-fetching. For BM25 I pass a document mask before ranking (bm25s `weight_mask`), so it's exact too.
+8. *"Which retrieval setup did you choose and why?"*
+   → Recursive 384-token chunks, **dense** search, company **and** year filters extracted from the question, **no** BM25 and **no** reranker by default: hit@10 **0.613** at ~110 ms. I expected hybrid + rerank to win; the ablation said otherwise: hybrid + both filters + rerank scored 0.580 at ~2.7 s. Inside one company BM25 still adds noise, and bge-reranker-base (512-token window, web-trained) doesn't order financial tables better than the embedding. Both stay one config switch away, and online rerankers (Cohere/Jina/Voyage) are wired in for the next comparison. That's the senior answer: choose by measurement, keep the alternatives cheap to re-test.
+9. *"How do you extract metadata filters, and what if it's wrong?"*
+   → Rules first: company aliases from the document metadata plus a ticker/nickname map (98% of questions get a company), years by regex. If a filter returns nothing, retry without it. A hard year filter is risky (a FY2017 figure often lives in the FY2018 10-K), which is why it's an ablation, not an assumption; here it helped by +4–14 pts. An LLM "self-query" extractor is the upgrade path for messy questions.
+10. *"Your filter improved doc_hit to 99% but hit@10 is only ~55%. What's left?"*
+    → The right filing, wrong page: inside one 300-page 10-K many pages look alike to a small embedder, and the question's wording differs from the filing's ("capex" vs "purchases of PP&E"). Next levers: query rewriting/HyDE (P7), contextual chunk headers, a stronger embedder (bge-base was +7 pts on a subset).
 
-**📌 Your numbers:** the ablation table (copy it here) · rerank latency 📌 ms per 50 candidates · effect of the filter 📌
+**📌 Your numbers (P5, `results/2026-11-24_retrieval_ablation/`):** hit@10 on 150 questions, page-aware 384: dense 0.46 · BM25 0.15 · hybrid 0.32 · +company filter 0.45 (doc_hit 0.83 → **0.99**) · +year filter 0.52 · +rerank 0.53 · hybrid + company/year filter 0.553 (recursive) · rerank cost ~2.5 s/question (p50) vs ~120 ms · company extracted from 98% of questions · dense + company/year filter **0.613** (recursive) vs hybrid + filters + rerank 0.580 at ~25× the latency
 
 **Go deeper:** [RRF paper](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) · [BEIR](https://arxiv.org/abs/2104.08663) · [ColBERT, late interaction](https://arxiv.org/abs/2004.12832) · [SPLADE, learned sparse retrieval](https://arxiv.org/abs/2107.05720) · [SBERT cross-encoders](https://sbert.net/examples/cross_encoder/applications/README.html)
 

@@ -213,10 +213,14 @@ class RetrievalCfg(_Strict):
 
 
 class RerankCfg(_Strict):
-    provider: Literal["none", "local", "cohere"] = "local"
-    model: str = "BAAI/bge-reranker-base"
+    provider: Literal["none", "local", "cohere", "jina", "voyage"] = "local"
+    model: str = "BAAI/bge-reranker-base"  # local cross-encoder
+    api_model: str | None = None  # online rerankers: None = the provider's default model
     top_n: int = Field(8, gt=0)
-    cohere_model: str = "rerank-v4.0-fast"
+    max_length: int = Field(512, gt=0)
+    batch_size: int = Field(16, gt=0)
+    on_error: Literal["fallback", "raise"] = "fallback"  # fallback = keep the RRF order
+    rate_limit: RateLimitCfg = Field(default_factory=lambda: RateLimitCfg(rpm=10))
 
 
 class GenerationCfg(_Strict):

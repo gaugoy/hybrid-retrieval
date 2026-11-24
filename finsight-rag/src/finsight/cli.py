@@ -280,9 +280,23 @@ def query(question: str) -> None:
 
 
 @app.command("eval")
-def eval_cmd() -> None:
-    """Run an evaluation experiment. [P5/P8]"""
-    _not_yet("P5/P8")
+def eval_cmd(
+    config: Path | None = ConfigOpt,
+    experiment: Path = typer.Option(
+        Path("configs/experiments/retrieval_ablation.yaml"), help="Experiment YAML"
+    ),
+    limit: int | None = typer.Option(None, help="First N questions only"),
+) -> None:
+    """Run a retrieval evaluation experiment; report in results/. [P5]"""
+    from finsight.evaluation.runner import load_experiment, run_retrieval_eval
+    from finsight.observability.logging import configure_logging
+
+    settings = load_settings(config)
+    configure_logging(settings.logging.level, settings.logging.json_format)
+    exp_path = experiment if experiment.is_absolute() else settings.root / experiment
+    out = run_retrieval_eval(settings, load_experiment(exp_path), limit=limit)
+    console.print((out / "report.md").read_text())
+    console.print(f"report: {out}")
 
 
 @app.command()

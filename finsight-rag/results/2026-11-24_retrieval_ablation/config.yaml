@@ -1,0 +1,61 @@
+experiment:
+  name: retrieval_ablation
+  dataset: financebench
+  k:
+  - 1
+  - 5
+  - 10
+  - 20
+  variants:
+  - name: dense
+    retrieval:
+      mode: dense
+      use_metadata_filter: false
+    rerank:
+      provider: none
+  - name: bm25
+    retrieval:
+      mode: sparse
+      use_metadata_filter: false
+    rerank:
+      provider: none
+  - name: hybrid
+    retrieval:
+      mode: hybrid
+      use_metadata_filter: false
+    rerank:
+      provider: none
+  - name: hybrid+filter
+    retrieval:
+      mode: hybrid
+      use_metadata_filter: true
+    rerank:
+      provider: none
+  - name: hybrid+filter+year
+    retrieval:
+      mode: hybrid
+      use_metadata_filter: true
+      filter_fields:
+      - company
+      - doc_period
+    rerank:
+      provider: none
+  - name: hybrid+rerank
+    retrieval:
+      mode: hybrid
+      use_metadata_filter: true
+    rerank:
+      provider: local
+  sweep:
+    chunking:
+    - strategy: page_aware
+      chunk_tokens: 384
+    - strategy: fixed
+      chunk_tokens: 384
+    - strategy: recursive
+      chunk_tokens: 384
+    - strategy: parent_child
+      child_tokens: 200
+limit: null
+fingerprint: 4adaf9ce9cde
+embedding: bge-small

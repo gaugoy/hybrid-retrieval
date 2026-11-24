@@ -1,0 +1,13 @@
+# The two variants added after the first ablation run (results merged into docs/evaluation.md).
+name: retrieval_ablation_extra
+dataset: financebench
+k: [1, 5, 10, 20]
+variants:
+  - {name: dense+filter+year, retrieval: {mode: dense, use_metadata_filter: true, filter_fields: [company, doc_period]}, rerank: {provider: none}}
+  - {name: hybrid+filter+year+rerank, retrieval: {mode: hybrid, use_metadata_filter: true, filter_fields: [company, doc_period]}, rerank: {provider: local}}
+sweep:
+  chunking:
+    - {strategy: page_aware, chunk_tokens: 384}
+    - {strategy: fixed, chunk_tokens: 384}
+    - {strategy: recursive, chunk_tokens: 384}
+    - {strategy: parent_child, child_tokens: 200}

@@ -3,7 +3,7 @@
 **Grounded, cited question answering over SEC financial filings.** Runs fully on a MacBook with local
 embeddings and a local LLM; Claude is optional, by config.
 
-> Status: **P4 (embedding & indexing) complete**: 31,114 page-aware chunks embedded with bge-small (106 chunks/s on the Apple GPU, ~5 min) into Qdrant (embedded) + BM25; re-runs are skipped by a manifest. **Any embedder by config**: local (bge, Ollama) or online free tiers (Gemini, Mistral, Cohere, Jina, Voyage), rate-limited and quota-aware, with a comparison report. Results in [`docs/evaluation.md`](docs/evaluation.md). See the [progress tracker](docs/DEVELOPMENT_GUIDE.md#6-progress-tracker).
+> Status: **P5 (retrieval) complete**: best retrieval = recursive 384-token chunks + dense search + company/year filters from the question: the gold evidence page is in the top 10 for **61%** of FinanceBench questions and the right filing for **99%** (dense alone: 46% / 89%). Full ablation in [`docs/evaluation.md`](docs/evaluation.md).
 > Results tables and a demo arrive in later phases.
 
 ## Docs
@@ -34,6 +34,8 @@ uv run python scripts/03_parse_pdfs.py     # step 03: parse PDFs into clean page
 uv run python scripts/04_chunk.py          # step 04: chunk pages (4 strategies), quality stats; --sweep compares all
 uv run python scripts/05_embed_and_index.py  # step 05: embed chunks (~5 min first time), build Qdrant + BM25, sanity queries
 uv run python scripts/05b_compare_embedders.py   # step 05b: compare embedders (local vs online) on the same chunks
+uv run python scripts/06_retrieve.py            # step 06: one question through BM25 / dense / hybrid / rerank
+uv run python scripts/07_eval_retrieval.py      # step 07: the retrieval ablation (~30 min with rerank variants)
 ```
 
 ### Choosing the embedding model (local or online)
@@ -63,7 +65,7 @@ Further steps are added phase by phase. `make ingest` parses and chunks on all c
 ```
 configs/          base.yaml (defaults) + local.yaml / cloud.yaml profiles
 src/finsight/     the package: config, schemas, container, CLI, data, ingestion, chunking, embedding, indexing
-scripts/          cell-based learning steps (00_check_env … 05_embed_and_index)
+scripts/          cell-based learning steps (00_check_env … 07_eval_retrieval)
 notebooks/        the same steps as Jupyter notebooks (generated: make notebooks)
 tests/            unit, integration (fake models) and slow (real data/models) tests
 docs/             spec, development guide, interview guide

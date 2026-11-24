@@ -25,7 +25,10 @@ GOLD = ("3M_2018_10K", 59)  # FinanceBench evidence page (0-based) for financebe
 
 
 def test_default_indexes_are_complete_and_find_the_gold_page() -> None:
-    settings = load_settings()
+    # P4 check on the page-aware index (where the measurement in the docstring was taken)
+    settings = load_settings(
+        overrides={"chunking": {"strategy": "page_aware", "chunk_tokens": 384}}
+    )
     if ixp.manifest(settings).entry(ixp.collection_name(settings)) is None:
         pytest.skip("indexes not built yet (run make index)")
     n_chunks = len(cp.load_chunks_df(settings))

@@ -237,7 +237,7 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 
 ### 3.6 Makefile targets
 
-`make help` lists the real targets; the Makefile is the source of truth. As of P4:
+`make help` lists the real targets; the Makefile is the source of truth. As of P5:
 
 | Target | Runs | Phase |
 |---|---|---|
@@ -250,7 +250,8 @@ The `finsight` CLI (`src/finsight/cli.py`) exposes the same operations as concis
 | `make chunk-sweep` | `finsight chunk --sweep`: every strategy × size, report in `results/` | P3 |
 | `make index` | `finsight index`: chunk if needed, embed (cached), build Qdrant + BM25; skipped when up to date (`EMBEDDER=<preset> make index`) | P4 |
 | `make embedders` / `make compare-embedders E=a,b Q=30` | the preset catalog (keys, cost, time) · dense-retrieval comparison, report in `results/` | P4 |
-| `make eval-retrieval`, `make eval`, `make serve`, `make ui` | placeholders until P5, P8, P9 | later |
+| `make eval-retrieval` | `finsight eval`: the retrieval ablation (all chunkers × variants, 150 Q), report in `results/` | P5 |
+| `make eval`, `make serve`, `make ui` | placeholders until P8, P9 | later |
 
 Learning scripts (`scripts/NN_*.py`) run single-process and print everything; `make` targets call the concise
 `finsight` CLI, which can use all cores (see P2 on why processes and cell-based scripts don't mix on macOS).
@@ -825,65 +826,46 @@ and record anything that differs in §7.
 
 ### P5 — Retrieval + retrieval evaluation
 
-**Goal:** dense, sparse, hybrid (RRF), metadata filters and a local reranker, plus a **retrieval-only eval** across chunkers. This gives the baseline table.
+**Goal:** dense, sparse, hybrid (RRF), metadata filters and rerankers (local or online), plus a **retrieval-only eval** across chunkers. This gives the baseline table.
 **Concepts:** lexical vs. semantic retrieval, rank fusion, bi-encoder vs. cross-encoder, Recall/MRR/NDCG. See Interview Guide §P5.
 
-**Files**
+**Files (as built)**
 ```
-src/finsight/retrieval/__init__.py  base.py  registry.py
-src/finsight/retrieval/dense.py        # DenseRetriever(qdrant, embedder, collection)
-src/finsight/retrieval/sparse.py       # SparseRetriever(bm25_dir)
-src/finsight/retrieval/hybrid.py       # rrf_fuse(); HybridRetriever(dense, sparse, rrf_k, candidate_k)
-src/finsight/retrieval/filters.py      # extract_filters(question, known_companies) -> QueryFilters
-src/finsight/retrieval/reranker.py     # LocalCrossEncoderReranker, CohereReranker (optional), NoopReranker
-src/finsight/evaluation/__init__.py  retrieval_metrics.py  runner.py  report.py
-configs/experiments/retrieval_ablation.yaml
-scripts/06_retrieve.py
-scripts/07_eval_retrieval.py
-tests/unit/test_rrf.py  test_filters.py  test_retrieval_metrics.py
+src/finsight/retrieval/base.py         # Retriever, Reranker ABCs; ChunkStore (chunk_id -> Chunk, parents, filter mask)
+src/finsight/retrieval/dense.py        # DenseRetriever(QdrantStore, embedder, collection): filters applied in-search
+src/finsight/retrieval/sparse.py       # SparseRetriever(BM25Index, ChunkStore): filters as a pre-ranking document mask
+src/finsight/retrieval/hybrid.py       # rrf_fuse (ties by chunk_id, duplicates once, per-stage scores kept), HybridRetriever
+src/finsight/retrieval/filters.py      # FilterExtractor (aliases from metadata + tickers/nicknames), apply_fields
+src/finsight/retrieval/reranker.py     # NoopReranker, LocalCrossEncoderReranker (bge-reranker-base), APIReranker (cohere/jina/voyage)
+src/finsight/retrieval/service.py      # RetrievalService: filters -> dense/BM25 -> RRF -> rerank, every stage + timing recorded
+src/finsight/evaluation/runner.py      # run_retrieval_eval(settings, experiment) -> results/<date>_<name>/
+src/finsight/evaluation/report.py      # summary_table (mean ± std, p50 ms, n), best_config, retrieval_report
+configs/experiments/retrieval_ablation.yaml  (+ retrieval_ablation_extra.yaml: the 2 variants added after the first run)
+scripts/06_retrieve.py  scripts/07_eval_retrieval.py
+tests/unit/test_rrf.py  test_filters.py  test_rerankers.py  test_retrieval_metrics.py (P4)
+tests/integration/conftest.py (tiny indexed corpus)  test_retrieval_service.py
 ```
+CLI: `finsight eval [--experiment ...] [--limit N]`; `make eval-retrieval`. Container: `chunk_store`, `dense_retriever`,
+`sparse_retriever`, `reranker`, `filter_extractor`, `retrieval`.
 
-**Implementation notes**
-- `rrf_fuse(rankings: list[list[RetrievedChunk]], k=60) -> list[RetrievedChunk]`: `score(d) = Σ 1/(k + rank_r(d))`. Keep each chunk's original per-stage scores in `scores_by_stage`. Break ties deterministically by `chunk_id`.
-- `filters.py` (rule-based first; an LLM-based self-query is an optional P7 extra):
-  - company: match case-insensitive aliases built from `DocumentMeta.company`, plus a small hand-written alias map (`"3M"`, `"MMM"`; `"Johnson & Johnson"`, `"J&J"`; ...)
-  - year: the regex `\b(?:FY\s?)?(20\d{2})\b`
-  - **Config `retrieval.filter_fields`: default `["company"]` only.** A FY2017 figure is often answered from the FY2018 10-K, which includes prior-year comparisons, so a hard year filter can hurt recall. Test `["company", "doc_period"]` as an ablation.
-- `reranker.py`: `CrossEncoder("BAAI/bge-reranker-base", max_length=512, device=...)`, then `predict([(query, c.chunk.text) for c in candidates], batch_size=16)`. Sort and keep `top_n`. The optional `CohereReranker` reuses the experiment's rate-limit retry pattern.
-- `retrieval_metrics.py`, with relevance defined as: **a retrieved chunk is relevant to an evidence item if `chunk.doc_name == ev.doc_name` and `page_start ≤ ev.page_idx ≤ page_end`.**
-  - `hit_at_k`: 1 if any of the top-k chunks is relevant to any evidence item
-  - `recall_at_k`: the share of the question's evidence items covered in the top-k
-  - `mrr`: 1 / (rank of the first relevant chunk), or 0
-  - `ndcg_at_k`: binary gains; count each evidence item only once (the first chunk that covers it)
-  - `doc_hit_at_k`: the right *document* is in the top-k (diagnoses company or doc confusion)
-- `runner.py`: `run_retrieval_eval(experiment_yaml) -> results dir`. For each variant in the matrix (built through `Container` with overrides), for each question, call `retrieve_only` and write one JSONL row with `{qid, variant, retrieved_ids, metrics, timings}`. Then aggregate.
-- `report.py`: a Markdown table per variant (mean ± std, n), a per-`question_type` breakdown, and the 10 worst questions showing their top 3 retrieved (doc, page) next to the gold.
-- `retrieval_ablation.yaml`:
-  ```yaml
-  name: retrieval_ablation
-  dataset: financebench
-  k: [5, 10, 20]
-  variants:
-    - {name: dense,          retrieval: {mode: dense},  rerank: {provider: none}}
-    - {name: bm25,           retrieval: {mode: sparse}, rerank: {provider: none}}
-    - {name: hybrid,         retrieval: {mode: hybrid}, rerank: {provider: none}}
-    - {name: hybrid+filter,  retrieval: {mode: hybrid, use_metadata_filter: true}, rerank: {provider: none}}
-    - {name: hybrid+rerank,  retrieval: {mode: hybrid, use_metadata_filter: true}, rerank: {provider: local}}
-  sweep:   # run every variant for each chunking config
-    chunking: [{strategy: fixed, chunk_tokens: 384}, {strategy: recursive, chunk_tokens: 384},
-               {strategy: page_aware, chunk_tokens: 384}, {strategy: parent_child, child_tokens: 200}]
-  ```
-
-**Step script `scripts/06_retrieve.py "What is the FY2018 capital expenditure amount for 3M?"`.** It prints the extracted filters, then **side-by-side top-5 tables for BM25 | Dense | Hybrid(RRF) | Reranked**, with doc, printed page, score and a 80-char preview, plus the per-stage timings. With `--qid financebench_id_03029`, it also marks the gold-page hits with ✅.
-
-**Step script `scripts/07_eval_retrieval.py --experiment ... [--limit 20]`.** It writes `results/{date}_retrieval_ablation/` and prints the summary table.
+**Implementation notes (as built)**
+- Every stage keeps `candidate_k` = 50; the reranker re-orders all 50 and the result is cut to `top_k`. The generator (P6) uses
+  the first `rerank.top_n`.
+- Rerankers: `rerank.provider` = none | local | cohere | jina | voyage. Online rerankers use the P4 provider plumbing
+  (rate limiter, retries, key lookup). `rerank.on_error: fallback` keeps the RRF order and records `reranker_failed`.
+- Filters: company aliases are built from the document metadata (name, name without legal suffix) plus a hand map (MMM, J&J,
+  AMEX, ...); a company is found in **98%** of the 150 questions. If a filter returns nothing, the service retries unfiltered
+  (`filter_returned_nothing`).
+- Metrics are the P4 `retrieval_metrics` module; the runner stores one row per chunking × variant × question with extracted
+  filters, top-3 and gold pages, per-stage timings.
 
 **Done when**
-- [ ] The full ablation runs on all 150 questions and the report is saved
-- [ ] The best configuration is chosen and written into `configs/base.yaml`; the reasoning goes in `docs/evaluation.md` and ADR-0003 (chunking)
-- [ ] The unit tests for RRF (including ties and duplicates), filters and metrics pass
+- [x] The full ablation runs on all 150 questions; reports in `results/2026-11-24_retrieval_ablation/` (+ `_extra`)
+- [x] The best configuration is written into `configs/base.yaml`; the reasoning is in `docs/evaluation.md` (P5) and §7
+- [x] Unit tests for RRF (ties, duplicates), filters, rerankers and metrics pass
 
-**Pitfalls:** evaluating with the filter switched on but the extraction failing silently (log the extracted filters for every question). Reranking with `embed_text` instead of `text`. Counting the same page twice in NDCG.
+**Pitfalls (met):** hybrid **without** a filter is worse than dense alone here (BM25 is weak on these long, instruction-heavy
+questions and RRF gives it equal weight). Reranking with `embed_text` instead of `text`. Counting the same page twice in NDCG.
 
 **References:** [Okapi BM25](https://en.wikipedia.org/wiki/Okapi_BM25) · [RRF paper (Cormack et al., 2009)](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) · [bge-reranker-base](https://huggingface.co/BAAI/bge-reranker-base) · [SBERT cross-encoders](https://sbert.net/examples/cross_encoder/applications/README.html) · [DCG/NDCG](https://en.wikipedia.org/wiki/Discounted_cumulative_gain) · [ColBERT (late interaction; to read about)](https://arxiv.org/abs/2004.12832)
 
@@ -1145,7 +1127,7 @@ scripts/12_load_test.py            # simple concurrent requests -> p50/p95
 | P2 Ingestion | ✅ done | 2026-11-24 | 12,013 pages (69 empty, 5,098 with tables, 40.4M chars) · **evidence on gold page 189/189 (100%)**, mean overlap 0.998, 0 offsets · label–number adjacency **0.28 → 0.97** vs plain extraction (160 numeric evidence pages) · 70 s sequential / 17 s on 6 processes · 96 header/footer patterns · 75 tests |
 | P3 Chunking | ✅ done | 2026-11-24 | 4 strategies × 3 sizes swept · page_aware_384: 31,114 chunks, 0% cross pages, 72% of evidence in one chunk · fixed/recursive cross pages 30–60% · evidence-in-one-chunk 44–48% @256 → 68–72% @384 → 80–87% @480 · table chunks with their column header 64% → 94% (carry) · 0 chunks over the 510-token limit · ~10 s per strategy · 99 tests |
 | P4 Indexing | ✅ done | 2026-11-24 | 31,114 page-aware chunks indexed in **5 min 6 s** on M5 (bge-small on MPS, **106 chunks/s**) · Qdrant 244 MB (embedded), BM25 25 MB (27,097 words), cache 66 MB · re-run 0.07 s · 3M capex gold page: dense rank 36 (no instruction) / 47 (with), BM25 121 → the vocabulary gap P5 must close · **online embedders** (Gemini, Mistral, Cohere, Jina, Voyage, Ollama; OpenAI paid-blocked) via presets + rate limits · dense-only baseline (150 Q): hit@10 0.46, MRR 0.23, doc_hit@10 0.89 · q30: bge-base 0.50 vs bge-small 0.43 hit@10 · 139 tests (137 fast + 2 slow) |
-| P5 Retrieval | ⬜ | | best config: · Recall@10: |
+| P5 Retrieval | ✅ done | 2026-11-24 | 4 chunkers × 8 variants × 150 Q · **best: recursive_384 + dense + company/year filter: hit@10 0.613**, MRR 0.35, doc_hit 0.99, ~110 ms · BM25 alone 0.15; hybrid (no filter) 0.32 < dense 0.46 · company filter: doc_hit 0.83 → 0.99 · local rerank +0–7 pts at ~2.7 s/q, not adopted · 161 tests |
 | P6 Generation | ⬜ | | |
 | P7 Advanced | ⬜ | | |
 | P8 Evaluation | ⬜ | | correct %: · faithfulness: |
@@ -1163,6 +1145,10 @@ Status legend: ⬜ not started · 🟨 in progress · ✅ done (all "Done when" 
 
 | Date | Phase | Decision / deviation | Why |
 |---|---|---|---|
+| 2026-11-24 | P5 | **Defaults changed by measurement:** chunking `recursive` 384 (was page_aware), `retrieval.mode: dense` (was hybrid), `filter_fields: [company, doc_period]` (was company), `rerank.provider: none` (was local) | Ablation on 150 questions: dense + both filters 0.613 hit@10 vs hybrid + filters + rerank 0.580, at 1/25 of the latency. The year filter helped (+4–14 pts) instead of hurting. Everything stays switchable |
+| 2026-11-24 | P5 | Ablation extended with `dense+filter+year` and `hybrid+filter+year+rerank` (`retrieval_ablation_extra.yaml`) | The first grid never combined the year filter with dense-only or with the reranker; the winner was in the gap |
+| 2026-11-24 | P5 | Rerankers: local cross-encoder plus Cohere / Jina / Voyage over the P4 provider plumbing; `rerank.on_error: fallback` | Free online rerankers for comparison; a reranker outage must not fail the request |
+| 2026-11-24 | P5 | Pipeline name `hybrid_rerank` kept (contract) although the default retrieval is now dense, no rerank | It runs whatever `retrieval`/`rerank` config says; renaming would break the contract for no gain |
 | 2026-11-24 | P4 | **Online embedders added** (user request): presets in `configs/embedders.yaml`, 3 wire formats over plain httpx (no vendor SDKs), shared `providers/` (rate limiter, usage store, retrying `post_json`) for P5/P6 too | Compare local vs hosted models with zero spend; one retry/limit path for every provider; nothing extra to install |
 | 2026-11-24 | P4 | **Contract change:** `EmbeddingCfg` = preset + provider/model/dimensions/templates/params/rate_limit/allow_paid/max_tokens_per_run; `query_instruction` replaced by `query_template`; `Embedder` gains `slug`, `provider`, `embed_queries`, `preferred_batch`; `Secrets` gains gemini/openai/mistral/jina/voyage keys; new `chunking.tokenizer` | Templates cover bge, Gemini 2, nomic uniformly; chunk sizes must not depend on the embedder; bge identities unchanged so the built index and cache stay valid |
 | 2026-11-24 | P4 | Paid-only providers refused unless `allow_paid: true`; `max_tokens_per_run` checked before every request | The user runs free tiers only: a typo in .env must never spend money |

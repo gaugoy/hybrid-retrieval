@@ -109,3 +109,44 @@ Source: [`results/2026-11-24_embedder_comparison_all/report.md`](../results/2026
   the embedding time. Worth a full-corpus run (~18 min) in P5 before deciding.
 - **Online models:** presets for Gemini, Mistral, Cohere, Jina, Voyage and OpenAI are ready (`finsight embedders`); add a free
   key and run `make compare-embedders E=bge-small,bge-base,gemini-001 Q=30` to extend this table.
+
+## P5 — Retrieval ablation
+
+Source: [`results/2026-11-24_retrieval_ablation/report.md`](../results/2026-11-24_retrieval_ablation/report.md) (+
+[`_extra`](../results/2026-11-24_retrieval_ablation_extra/report.md)), `make eval-retrieval`. 150 questions, bge-small,
+candidate_k 50, metrics on the final top 10. Values are means; std ≈ 0.5 for hit@k, so differences under ~0.05 are noise.
+
+**hit@10 (gold evidence page in the top 10)**
+
+| variant | page_aware_384 | fixed_384 | recursive_384 | parent_child_200 |
+|---|---|---|---|---|
+| dense | 0.460 | 0.407 | 0.467 | 0.473 |
+| bm25 | 0.147 | 0.153 | 0.160 | 0.147 |
+| hybrid (RRF) | 0.320 | 0.300 | 0.387 | 0.347 |
+| hybrid + company filter | 0.447 | 0.393 | 0.473 | 0.440 |
+| hybrid + company + year filter | 0.520 | 0.533 | **0.553** | 0.500 |
+| hybrid + company filter + rerank | 0.527 | 0.507 | 0.513 | 0.520 |
+| **dense + company + year filter** (extra run) | 0.593 | 0.560 | **0.613** | 0.587 |
+| hybrid + company + year filter + rerank (extra run) | 0.607 | 0.600 | 0.580 | 0.573 |
+
+**Chosen default (`configs/base.yaml`): recursive_384 · dense · company + year filter · no reranker** — hit@10 **0.613**,
+hit@5 0.527, MRR 0.353, nDCG@10 0.385, doc_hit@10 0.993, ~110 ms per question. BM25 and the reranker stay available by config.
+
+**doc_hit@10 (right filing in the top 10):** dense 0.89–0.91 · hybrid 0.78–0.85 · with the company filter **0.96–0.99**.
+**Latency (p50 per question):** dense ~20 ms · hybrid + filter ~110–220 ms · + rerank (50 pairs, bge-reranker-base, MPS) ~1.6–2.8 s.
+
+**What it says**
+- **Filters are the biggest lever.** The company filter (found in 98% of questions) takes doc_hit from ~0.83 to ~0.98: most
+  dense errors were *other companies'* look-alike pages. The year filter adds another +4–14 pts hit@10; it can drop prior-year
+  data in principle, but on FinanceBench it helps everywhere.
+- **Hybrid without filters is worse than dense alone** (0.32 vs 0.46). FinanceBench questions are long and instruction-heavy
+  ("Assume that you are a public equities analyst. Answer the following question by primarily using information that is shown in
+  the balance sheet: ..."), so BM25 mostly matches boilerplate, and RRF gives that weak list equal weight. Inside one company's
+  filings BM25 becomes useful again.
+- **Dense + filters beats hybrid + filters + rerank** (0.61 vs 0.58 on recursive_384), at 1/25 of the latency. Inside one company,
+  BM25 still adds noise, and bge-reranker-base (512-token window, trained on web text) doesn't sort financial tables better
+  than the embedding does. "Add BM25 and a reranker" is the usual advice; on this data it is measurably not worth it.
+- **Chunkers are within noise of each other** once filters are on (0.56–0.61); recursive_384 is best by 2–5 pts. Containment
+  (P3) favoured big chunks; retrieval says strategy matters less than filters and the query.
+- **The remaining gap is page-level:** with doc_hit ≈ 0.99 and hit@10 ≈ 0.55, the right filing is found but the right page often
+  isn't (vocabulary mismatch, near-duplicate pages). P7 targets this with query rewriting / HyDE.

@@ -11,7 +11,7 @@ WHY
   until something asks for it, and it is created only once per container.
 
 GROWTH PLAN
-  P3: tokenizer, chunker · P4: embedder, qdrant, bm25 (done) · P5: retrievers, reranker ·
+  P3: tokenizer, chunker · P4: embedder, qdrant, bm25 · P5: retrievers, reranker (done) ·
   P6: llm, pipeline · P8: judge.
 """
 
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     from finsight.embedding.base import Embedder
     from finsight.indexing.bm25_store import BM25Index
     from finsight.indexing.qdrant_store import QdrantStore
+    from finsight.retrieval.base import ChunkStore, Reranker, Retriever
+    from finsight.retrieval.filters import FilterExtractor
+    from finsight.retrieval.service import RetrievalService
 
 log = get_logger(__name__)
 
@@ -87,6 +90,59 @@ class Container:
         from finsight.indexing.pipeline import load_bm25
 
         return load_bm25(self.settings)
+
+    @cached_property
+    def chunk_store(self) -> ChunkStore:
+        """chunk_id -> Chunk for the configured chunking (parents too, for parent_child)."""
+        from finsight.chunking import pipeline as cp
+        from finsight.retrieval.base import ChunkStore
+
+        return ChunkStore.from_files(cp.chunks_path(self.settings), cp.parents_path(self.settings))
+
+    @cached_property
+    def dense_retriever(self) -> Retriever:
+        from finsight.retrieval.dense import DenseRetriever
+
+        return DenseRetriever(self.qdrant, self.embedder, self.collection)
+
+    @cached_property
+    def sparse_retriever(self) -> Retriever:
+        from finsight.retrieval.sparse import SparseRetriever
+
+        return SparseRetriever(self.bm25, self.chunk_store)
+
+    @cached_property
+    def reranker(self) -> Reranker:
+        """The configured reranker (P5): none, local cross-encoder, or an online API."""
+        from finsight.indexing.pipeline import usage_dir
+        from finsight.retrieval.reranker import build_reranker
+
+        s = self.settings
+        return build_reranker(
+            s.rerank, secrets=s.secrets, device=s.embedding.device, usage_dir=usage_dir(s)
+        )
+
+    @cached_property
+    def filter_extractor(self) -> FilterExtractor:
+        from finsight.data import financebench as fb
+        from finsight.retrieval.filters import FilterExtractor
+
+        companies = {m.company for m in fb.load_document_meta(self.settings).values()}
+        return FilterExtractor(companies)
+
+    @cached_property
+    def retrieval(self) -> RetrievalService:
+        """Filters → dense/BM25 → RRF → rerank, as configured (P5)."""
+        from finsight.retrieval.service import RetrievalService
+
+        mode = self.settings.retrieval.mode
+        return RetrievalService(
+            self.settings,
+            dense=self.dense_retriever if mode in ("dense", "hybrid") else None,
+            sparse=self.sparse_retriever if mode in ("sparse", "hybrid") else None,
+            reranker=self.reranker,
+            extractor=self.filter_extractor,
+        )
 
     def close(self) -> None:
         """Release the Qdrant folder lock (embedded mode)."""

@@ -8,4 +8,4 @@ judge:
   provider: ollama
 
 rerank:
-  provider: local
+  provider: none    # P5: no gain on FinanceBench; set local / cohere / jina / voyage to compare

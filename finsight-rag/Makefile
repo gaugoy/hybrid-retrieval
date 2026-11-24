@@ -59,8 +59,8 @@ embedders: ## P4: list embedding presets (local + online), key status, cost/time
 compare-embedders: ## P4: dense-retrieval comparison, e.g. make compare-embedders E=bge-small,gemini-001 Q=30
 	uv run finsight compare-embedders --embedders $(or $(E),bge-small,bge-small-noinstr) $(if $(Q),--limit-questions $(Q),)
 
-eval-retrieval: ## P5: retrieval ablation
-	uv run python scripts/07_eval_retrieval.py --experiment configs/experiments/retrieval_ablation.yaml
+eval-retrieval: ## P5: retrieval ablation (all chunkers × variants, 150 Q); report in results/
+	uv run finsight eval --experiment configs/experiments/retrieval_ablation.yaml
 
 eval: ## P8: end-to-end evaluation
 	uv run python scripts/10_eval_end_to_end.py --experiment configs/experiments/end_to_end.yaml
