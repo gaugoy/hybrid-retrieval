@@ -154,6 +154,7 @@ header (vs the metadata header) Â· a batching inference server for concurrency Â
 
 | Doc | For |
 |---|---|
+| [CODEMAP.md](docs/CODEMAP.md) | Where every module lives + recipes for common changes (read this before changing code) |
 | [architecture.md](docs/architecture.md) | Components, data flow, the `/v1/query` sequence |
 | [evaluation.md](docs/evaluation.md) | Methodology and every results table |
 | [runbook.md](docs/runbook.md) | Run, rebuild, switch providers, debug a bad answer |
